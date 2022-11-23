@@ -1,24 +1,27 @@
 import os 
 import sys
 from tqdm import tqdm 
-import torch
+from datetime import date
+
 import numpy as np
 from ase import Atoms, io 
 import networkx as nx
-from datetime import date
-import torch.autograd.profiler as profiler
 from sklearn.utils import shuffle
-from pynvml import *
+
+import torch
+import torch.autograd.profiler as profiler
 
 from sampling import *
 from utils_ic import * 
 
+from pynvml import *
 nvmlInit()
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-EPS = 1e-6
+EPS = 1e-7
 
+    
 def shuffle_traj(traj):
     full_idx = list(range(len(traj)))
     full_idx = shuffle(full_idx)
@@ -99,6 +102,8 @@ def loop(loader, optimizer, device, model, beta, epoch,
     orient_loss = []
     norm_loss = []
     graph_loss = []
+    nbr_loss = []
+    inter_loss = []
     kl_loss = []
     
     if train:
@@ -114,9 +119,11 @@ def loop(loader, optimizer, device, model, beta, epoch,
     
     delta = 0.0
     gamma = 0.0
+    zeta = 0.0
     beta = 10.0
-    if epoch > 4:
-        delta, gamma = 10, 0.5
+
+    if epoch > 4 or not train:
+        delta, gamma, zeta = 20, 0.5, 0.5
 
     for i, batch in enumerate(loader):
         batch = batch_to(batch, device)
@@ -133,34 +140,25 @@ def loop(loader, optimizer, device, model, beta, epoch,
             loss_kl = 0.0
             kl_loss.append(0.0)
 
+        print(f"-{i}th batch---------------")
         if ic_flag:            
             mask_batch = torch.cat([batch['mask']])
             natom_batch = mask_batch.sum()
 
             loss_bond = ((torch.absolute(ic_recon[:,:,0]) - ic[:,:,0]).reshape(-1)) * mask_batch
-            # loss_angle = ((torch.cos(ic_recon[:,:,1]/2) - torch.cos(ic[:,:,1]/2))).reshape(-1) * mask_batch
-            loss_angle = (2*(1 - torch.cos(ic[:,:,1] - ic_recon[:,:,1]))).reshape(-1) * mask_batch 
-            # loss_torsion_ = ((torch.cos(ic_recon[:,:,2]/2) - torch.cos(ic[:,:,2]/2))).reshape(-1) * mask_batch 
-            loss_torsion_ = (2*(1 - torch.cos(ic[:,:,2] - ic_recon[:,:,2]))).reshape(-1) * mask_batch 
+            loss_angle = (2*(1 - torch.cos(ic[:,:,1] - ic_recon[:,:,1])) + EPS).sqrt().reshape(-1) * mask_batch 
+            loss_torsion_ = (2*(1 - torch.cos(ic[:,:,2] - ic_recon[:,:,2])) + EPS).sqrt().reshape(-1) * mask_batch 
 
             loss_bond = loss_bond.pow(2).sum()/natom_batch
             loss_angle = loss_angle.sum()/natom_batch
             loss_torsion = loss_torsion_.sum()/natom_batch
-            print("bond, angle, torsion: ", loss_bond, loss_angle, loss_torsion)
-
-            loss_torsions = loss_torsion_.reshape(-1, 13)
-            mask_per = mask_batch.reshape(-1,13)
-            print("N", mask_per[:,0].sum(), loss_torsions[:,0].sum()/mask_per[:,0].sum())
-            print("C", mask_per[:,1].sum(), loss_torsions[:,1].sum()/mask_per[:,1].sum())
-            print("O", mask_per[:,2].sum(), loss_torsions[:,2].sum()/mask_per[:,2].sum())
-            print("CB", mask_per[:,3].sum(), loss_torsions[:,3].sum()/mask_per[:,3].sum())
-            print("CG", mask_per[:,4].sum(), loss_torsions[:,4].sum()/mask_per[:,4].sum())
-            print("CD", mask_per[:,5].sum(), loss_torsions[:,5].sum()/mask_per[:,5].sum())
-            print("CE", mask_per[:,6].sum(), loss_torsions[:,6].sum()/mask_per[:,6].sum())
+            print("bond     : ", "{:.5f}".format(loss_bond.item()))
+            print("angle    : ", "{:.5f}".format(loss_angle.item()))
+            print("torsion  : ", "{:.5f}".format(loss_torsion.item()))
 
             loss_recon = (loss_bond + loss_angle + loss_torsion) 
-            print("ic_loss: ", loss_recon)
-            # loss_recon += loss_xyz * 0.1
+            print("ic       : ", "{:.5f}".format(loss_recon.item()))
+            recon_loss.append(loss_recon.item())
 
         else:
             loss_recon = (xyz_recon - xyz).pow(2).mean()
@@ -175,36 +173,54 @@ def loop(loader, optimizer, device, model, beta, epoch,
             info = info_dict[int(batch['prot_idx'][0])]
             xyz_recon = ic_to_xyz(OG_CG_nxyz, ic_recon, info).reshape(-1,3)
             loss_xyz = (xyz_recon - xyz).pow(2).mean()
-            print("xyz_loss: ", loss_xyz)
+            print("xyz      : ", "{:.5f}".format(loss_xyz.item()))
+            
+            # add graph loss 
+            if gamma != 0.0:
+                edge_list = batch['bond_edge_list']
+                print("n edges  : ", edge_list.shape[0])
+                gen_dist = ((xyz_recon[edge_list[:, 0]] - xyz_recon[edge_list[:, 1]]).pow(2).sum(-1) + EPS).sqrt()
+                data_dist = ((xyz[edge_list[:, 0 ]] - xyz[edge_list[:, 1 ]]).pow(2).sum(-1) + EPS).sqrt()
+                loss_graph = (gen_dist - data_dist).pow(2).mean()
+                print("graph    : ", "{:.5f}".format(loss_graph.item()))
+                loss_recon += loss_graph * gamma 
 
             if delta != 0.0:
                 nbr_list = batch['nbr_list']
-                nbr_dist = ((xyz_recon[nbr_list[:, 0]] - xyz_recon[nbr_list[:, 1]]).pow(2).sum(-1) + EPS).sqrt()
-                loss_nbr = torch.maximum(0.95 - nbr_dist,torch.Tensor([0.0]).to(xyz.device)).mean()
-                print("nbr_loss: ", loss_nbr)
+                combined = torch.cat((edge_list, nbr_list))
+                uniques, counts = combined.unique(dim=0, return_counts=True)
+                difference = uniques[counts == 1]
+                print("n nbrs   : ", difference.shape[0])
+                nbr_dist = ((xyz_recon[difference[:, 0]] - xyz_recon[difference[:, 1]]).pow(2).sum(-1) + EPS).sqrt()
+                loss_nbr = torch.maximum(2.1 - nbr_dist,torch.Tensor([0.0]).to(xyz.device)).mean()
+                print("nbr      : ", "{:.5f}".format(loss_nbr.item()))
                 loss_recon += loss_nbr * delta
-
-            # add graph loss 
-            if gamma != 0.0:
-                edge_list = batch['bond_edge_list']#.to("cpu") 
-                gen_dist = ((xyz_recon[edge_list[:, 0 ]] - xyz_recon[edge_list[:, 1 ]]).pow(2).sum(-1) + EPS).sqrt()
-                data_dist = ((xyz[edge_list[:, 0 ]] - xyz[edge_list[:, 1 ]]).pow(2).sum(-1) + EPS).sqrt()#.to(xyz_recon.device)
-                loss_graph = (gen_dist - data_dist).pow(2).mean()
-                print("graph_loss: ", loss_graph)
-                loss_recon += loss_graph * gamma 
+            
+            # add interaction loss
+            if zeta != 0.0:                
+                interaction_list = batch['interaction_list']
+                print("n inter  : ", interaction_list.shape[0])
+                inter_dist = ((xyz_recon[interaction_list[:, 0]] - xyz_recon[interaction_list[:, 1]]).pow(2).sum(-1) + EPS).sqrt()
+                loss_inter = torch.maximum(inter_dist - 4.0, torch.Tensor([0.0]).to(xyz.device)).mean()
+                print("inter    : ", "{:.5f}".format(loss_inter.item())) 
+                loss_recon += loss_inter * zeta
+                
             else:
                 loss_graph = torch.Tensor([0.0]).to(device)
+                loss_nbr = torch.Tensor([0.0]).to(device)
+                loss_inter = torch.Tensor([0.0]).to(device)
         else:
             loss_graph = torch.Tensor([0.0]).to(device)
+            loss_nbr = torch.Tensor([0.0]).to(device)
+            loss_inter = torch.Tensor([0.0]).to(device)
         
         loss =  loss_recon + loss_kl * beta
 
         memory = torch.cuda.memory_allocated(device) / (1024 ** 2)
         h = nvmlDeviceGetHandleByIndex(0)
         info = nvmlDeviceGetMemoryInfo(h)
-        print(f'total    : {info.total/1024**2}')
-        print(f'free     : {info.free/1024**2}')
-        print(f'used     : {info.used/1024**2}')
+        print(f'memory usage : ', "{:.5f} %".format(info.used*100/info.total))
+        print(f"---------------------------")
         # memory = 0
 
         # if loss.item() >= gamma * 200.0 or torch.isnan(loss):
@@ -226,19 +242,25 @@ def loop(loader, optimizer, device, model, beta, epoch,
             loss.backward()
 
         # logging 
-        recon_loss.append(loss_recon.item())
+        # recon_loss.append(loss_recon.item())
         graph_loss.append(loss_graph.item())
+        nbr_loss.append(loss_nbr.item())
+        inter_loss.append(loss_inter.item())
         total_loss.append(loss.item())
         
         mean_kl = np.array(kl_loss).mean()
         mean_recon = np.array(recon_loss).mean()
         mean_graph = np.array(graph_loss).mean()
+        mean_nbr = np.array(nbr_loss).mean()
+        mean_inter = np.array(inter_loss).mean()
         mean_total_loss = np.array(total_loss).mean()
 
         postfix = ['total={:.3f}'.format(mean_total_loss),
                     'KL={:.4f}'.format(mean_kl) , 
                    'recon={:.4f}'.format(mean_recon),
                    'graph={:.4f}'.format(mean_graph) , 
+                   'nbr={:.4f}'.format(mean_nbr) ,
+                   'inter={:.4f}'.format(mean_inter) ,
                    'memory ={:.4f} Mb'.format(memory) 
                    ]
         
@@ -251,7 +273,7 @@ def loop(loader, optimizer, device, model, beta, epoch,
     for result in postfix:
         print(result)
     
-    return mean_total_loss, mean_kl, mean_recon, mean_graph, xyz, xyz_recon 
+    return mean_total_loss, mean_kl, mean_recon, mean_graph, mean_nbr, mean_inter, xyz, xyz_recon 
 
 def get_all_true_reconstructed_structures(loader, device, model, atomic_nums=None, n_cg=10, atomwise_z=False, tqdm_flag=True, reflection=False, ic_flag=False, top_table=None, info_dict=None):
     model = model.to(device)
