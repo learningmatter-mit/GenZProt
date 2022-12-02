@@ -3,7 +3,8 @@ sys.path.append("../scripts/")
 import glob
 import itertools
 import random
-import tqdm
+from tqdm import tqdm
+import time
 
 import numpy as np 
 import pickle
@@ -12,16 +13,15 @@ from sklearn.utils import shuffle
 
 from moleculekit.molecule import Molecule
 import mdtraj as md
-import pyemma
 
 import torch
 from torch.utils.data import DataLoader
 from torch_scatter import scatter_mean, scatter_add
 
-from .data import * 
-from .cgae import *
+from data import * 
+from cgae import *
 from utils_ic import * 
-
+from utils import shuffle_traj
 
 THREE_LETTER_TO_ONE = {
     "ARG": "R", 
@@ -123,8 +123,8 @@ PROTEINFILES = {'covid': {'traj_paths': "../data/DESRES-Trajectory_sarscov2-1144
                             },
                 }
 
-prefixs = ['cc_']
-PED_PDBs = [glob.glob(f'../data/md_pdbfiles/used/exp/{prefix}*.pdb') for prefix in prefixs]
+prefixs = ['PED']
+PED_PDBs = [glob.glob(f'../data/processed/{prefix}*.pdb') for prefix in prefixs]
 for idx, prefix_files in enumerate(PED_PDBs):
     for PDBfile in prefix_files:
         ID = PDBfile.split('/')[-1].split('.')[0][len(prefixs[idx]):]
@@ -786,6 +786,63 @@ def build_ic_multiprotein_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_
 
         batch_interaction_list.append(interaction_list)
     dataset.props['interaction_list'] = batch_interaction_list
-
+    print("finished creating dataset")
     return dataset
 
+
+def create_info_dict(dataset_label_list):
+    n_cg_list, traj_list, info_dict = [], [], {} 
+    cnt = 0
+    for idx, label in enumerate(tqdm(dataset_label_list)): 
+        try:
+            traj = shuffle_traj(load_protein_traj(label))
+            table, _ = traj.top.to_dataframe()
+            reslist = list(set(list(table.resSeq)))
+            reslist.sort()
+            
+            n_cg = len(reslist)
+            atomic_nums, protein_index = get_atomNum(traj)
+
+            atomn = [list(table.loc[table.resSeq==res].name) for res in reslist][1:-1]
+            resn = list(table.loc[table.name=='CA'].resName)[1:-1]
+        
+            atom_idx = []
+            permute = []
+            permute_idx, atom_idx_idx = 0, 0
+            for i in range(len(resn)):  
+                atom = atomn[i][0]
+                p = [np.where(np.array(core_atoms[resn[i]])==atom)[0][0]+permute_idx for atom in atomn[i]]
+                permute.append(p)  
+                atom_idx.append(np.arange(atom_idx_idx, atom_idx_idx+len(atomn[i])))
+                permute_idx += len(atomn[i])
+                atom_idx_idx += 14
+
+            atom_orders1 = [[] for _ in range(10)]
+            atom_orders2 = [[] for _ in range(10)]
+            atom_orders3 = [[] for _ in range(10)]
+            for res_idx, res in enumerate(resn):
+                atom_idx_list = atom_order_list[res]
+                for i in range(10):
+                    if i <= len(atom_idx_list)-1:
+                        atom_orders1[i].append(atom_idx_list[i][0])
+                        atom_orders2[i].append(atom_idx_list[i][1])
+                        atom_orders3[i].append(atom_idx_list[i][2])
+                    else:
+                        atom_orders1[i].append(0)
+                        atom_orders2[i].append(1)
+                        atom_orders3[i].append(2)
+            atom_orders1 = torch.LongTensor(np.array(atom_orders1))
+            atom_orders2 = torch.LongTensor(np.array(atom_orders2))
+            atom_orders3 = torch.LongTensor(np.array(atom_orders3))
+            atom_orders = torch.stack([atom_orders1, atom_orders2, atom_orders3], axis=-1) # 10, n_res, 3
+            
+            permute = torch.LongTensor(np.concatenate(permute)).reshape(-1)
+            atom_idx = torch.LongTensor(np.concatenate(atom_idx)).reshape(-1)
+            
+            info_dict[cnt] = (permute, atom_idx, atom_orders)
+            n_cg_list.append(n_cg)
+            traj_list.append(traj)
+            cnt += 1
+        except:
+            print(f'failed to load {label}')
+    return n_cg_list, traj_list, info_dict

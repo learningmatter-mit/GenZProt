@@ -1,8 +1,9 @@
 
 import torch
 from torch import nn
-from .conv import * 
+from conv import * 
 from torch_scatter import scatter_mean, scatter_add
+from e3nn_enc import *
 
 class ENDecoder(nn.Module):
     def __init__(self, n_atom_basis, n_rbf, cutoff, num_conv, activation ):   
@@ -124,7 +125,85 @@ class EquivariantPsuedoDecoder(nn.Module):
         return S, V 
 
 
-class MLPDecoder(nn.Module):
+class internalEquivariantPsuedoDecoder(nn.Module):
+    def __init__(self, n_atom_basis, n_rbf, cutoff, num_conv, activation, breaksym=False):   
+        
+        nn.Module.__init__(self)
+        
+        self.message_blocks = nn.ModuleList(
+                [EquiMessagePsuedo(feat_dim=n_atom_basis,
+                              activation=activation,
+                              n_rbf=n_rbf,
+                              cutoff=cutoff,
+                              dropout=0.0)
+                 for _ in range(num_conv)]
+            )
+
+        self.update_blocks = nn.ModuleList(
+            [UpdateBlock(feat_dim=n_atom_basis,
+                         activation=activation,
+                         dropout=0.0)
+             for _ in range(num_conv)]
+        )
+
+
+        self.pseudo_update_blocks = nn.ModuleList(
+            [PseudoUpdateBlock(feat_dim=n_atom_basis,
+                         activation=activation,
+                         dropout=0.0)
+             for _ in range(num_conv)]
+        )
+
+        # self.linear = nn.Linear(n_atom_basis, 3)
+
+        self.breaksym = breaksym
+        self.n_atom_basis = n_atom_basis
+
+    
+    def forward(self, cg_xyz, CG_nbr_list, mapping, S):
+    
+        CG_nbr_list, _ = make_directed(CG_nbr_list)
+        r_ij = cg_xyz[CG_nbr_list[:, 1]] - cg_xyz[CG_nbr_list[:, 0]]
+
+        V = torch.zeros(S.shape[0], S.shape[1], 3 ).to(S.device)
+        if self.breaksym:
+            Sbar = torch.ones(S.shape[0], S.shape[1]).to(S.device)
+        else:
+            Sbar = torch.zeros(S.shape[0], S.shape[1]).to(S.device)
+        Vbar = torch.zeros(S.shape[0], S.shape[1], 3 ).to(S.device)
+
+        for i, message_block in enumerate(self.message_blocks):
+            
+            # message block
+            dS, dSbar, dV, dVbar = message_block(s_j=S,
+                                                   sbar_j = Sbar,
+                                                   v_j=V,
+                                                   vbar_j=Vbar,
+                                                   r_ij=r_ij,
+                                                   nbrs=CG_nbr_list,
+                                                   edge_wgt=None
+                                                   )
+            S = S + dS
+            Sbar = Sbar + dSbar
+            V = V + dV
+            Vbar = Vbar + dVbar 
+
+            # update block
+            dS_update, dV_update = self.update_blocks[i](s_i=S,
+                                                v_i=V)
+            # dSbar_update, dVbar_update = self.pseudo_update_blocks[i](s_i=Sbar,
+            #                                     v_i=Vbar)
+
+            # Sbar = Sbar + dSbar_update
+            # Vbar = Vbar + dVbar_update
+
+            S = S + dS_update
+            V = V + dV_update
+
+        return S, V 
+
+
+class MLPDecoder_(nn.Module):
     def __init__(self, n_atom_basis, n_rbf, cutoff, num_conv, activation, cross_flag=True):   
         nn.Module.__init__(self)
 
@@ -142,27 +221,31 @@ class MLPDecoder(nn.Module):
                                     cutoff=cutoff,
                                     dropout=0.0)
 
-        self.dense1 = nn.Sequential(nn.ReLU(), 
+        # self.equi_message = TensorProductConvBlock()
+
+        self.dense1 = nn.Sequential(nn.Tanh(), 
                                    nn.Linear(n_atom_basis, n_atom_basis), 
-                                   nn.ReLU(), 
+                                   nn.Tanh(), 
                                    nn.Linear(n_atom_basis, n_atom_basis))
         
-        self.dense2 = nn.Sequential(nn.ReLU(), 
+        self.dense2 = nn.Sequential(nn.Tanh(), 
                                    nn.Linear(n_atom_basis, n_atom_basis), 
-                                   nn.ReLU(), 
+                                   nn.Tanh(), 
                                    nn.Linear(n_atom_basis, n_atom_basis))
 
-        self.dense3 = nn.Sequential(nn.ReLU(), 
+        self.dense3 = nn.Sequential(nn.Tanh(), 
                                    nn.Linear(n_atom_basis, 39), 
-                                   nn.ReLU(), 
+                                   nn.Tanh(), 
                                    nn.Linear(39, 39))
 
-    def forward(self, cg_xyz, CG_nbr_list, mapping, S, mask=None):   
+    def forward(self, cg_z, cg_xyz, CG_nbr_list, mapping, S, mask=None):   
         CG_nbr_list, _ = make_directed(CG_nbr_list)
 
-        r_ij = cg_xyz[CG_nbr_list[:, 1]] - cg_xyz[CG_nbr_list[:, 0]]
+        # v_i = self.equi_message(S, cg_xyz, CG_nbr_list)
 
+        r_ij = cg_xyz[CG_nbr_list[:, 1]] - cg_xyz[CG_nbr_list[:, 0]]
         dist, unit = preprocess_r(r_ij)
+
         inv_out = self.inv_message(s_j=S,
                                    dist=dist,
                                    nbrs=CG_nbr_list)
@@ -185,11 +268,92 @@ class MLPDecoder(nn.Module):
                     dim_size=graph_size)
 
         v_i = v_i + self.dense2(v_i_2)
+        # v_i = v_i + self.dense2(v_i)
         
         V = self.dense3(v_i) 
         V = V.reshape(-1,13,3)
+        # print(V[0])
         return None, V
 
+
+class MLPDecoder(nn.Module):
+    def __init__(self, n_atom_basis, n_rbf, cutoff, num_conv, activation, cross_flag=True):   
+        nn.Module.__init__(self)
+
+        self.n_atom_basis = n_atom_basis
+        self.inv_message = InvariantMessage(in_feat_dim=n_atom_basis,
+                                    out_feat_dim=n_atom_basis, 
+                                    activation=activation,
+                                    n_rbf=n_rbf,
+                                    cutoff=cutoff,
+                                    dropout=0.0)
+
+        self.inv_message2 = InvariantMessage(in_feat_dim=n_atom_basis,
+                                    out_feat_dim=n_atom_basis, 
+                                    activation=activation,
+                                    n_rbf=n_rbf,
+                                    cutoff=cutoff,
+                                    dropout=0.0)
+
+        self.dense1 = nn.Sequential(nn.Tanh(), 
+                                   nn.Linear(n_atom_basis, n_atom_basis), 
+                                   nn.Tanh(), 
+                                   nn.Linear(n_atom_basis, n_atom_basis))
+        
+        self.dense2 = nn.Sequential(nn.Tanh(), 
+                                   nn.Linear(n_atom_basis, n_atom_basis), 
+                                   nn.Tanh(), 
+                                   nn.Linear(n_atom_basis, n_atom_basis))
+
+        self.final_backbone = nn.Sequential(nn.Tanh(), 
+                                   nn.Linear(n_atom_basis, 9), 
+                                   nn.Tanh(), 
+                                   nn.Linear(9, 9))
+
+        self.final_sidechain = nn.Sequential(nn.Tanh(), 
+                                    nn.Linear(n_atom_basis, 30), 
+                                    nn.Tanh(), 
+                                    nn.Linear(30, 30))
+
+        self.sidechain_embed = nn.Sequential(nn.Embedding(20, 30*30), nn.Tanh())
+        self.sidechain_embed_bias = nn.Embedding(20, 30)
+
+    def forward(self, cg_z, cg_xyz, CG_nbr_list, mapping, S, mask=None):   
+        CG_nbr_list, _ = make_directed(CG_nbr_list)
+
+        r_ij = cg_xyz[CG_nbr_list[:, 1]] - cg_xyz[CG_nbr_list[:, 0]]
+        dist, unit = preprocess_r(r_ij)
+
+        inv_out = self.inv_message(s_j=S,
+                                   dist=dist,
+                                   nbrs=CG_nbr_list)
+        graph_size = S.shape[0]
+
+        v_i = scatter_add(src=inv_out,
+                    index=CG_nbr_list[:, 0],
+                    dim=0,
+                    dim_size=graph_size)
+
+        v_i = S + self.dense1(v_i)
+
+        inv_out = self.inv_message2(s_j=v_i,
+                                   dist=dist,
+                                   nbrs=CG_nbr_list)
+        
+        v_i_2 = scatter_add(src=inv_out,
+                    index=CG_nbr_list[:, 0],
+                    dim=0,
+                    dim_size=graph_size)
+
+        v_i = v_i + self.dense2(v_i_2)
+        ic_backbone = self.final_backbone(v_i).reshape(-1,3,3)
+        res_embed_w = self.sidechain_embed(cg_z).reshape(-1, 30, 30)
+        res_embed_b = self.sidechain_embed_bias(cg_z)
+        ic_sidechain = self.final_sidechain(v_i)
+        ic_sidechain = torch.matmul(ic_sidechain.unsqueeze(-2), res_embed_w).squeeze() + res_embed_b
+        ic_sidechain = ic_sidechain.reshape(-1,10,3)
+        ic_recon = torch.cat([ic_backbone, ic_sidechain], axis=-2) 
+        return None, ic_recon
 
 class SequentialDecoder(nn.Module):
     def __init__(self, n_atom_basis, n_rbf, cutoff, num_conv, activation, cross_flag=True):   
@@ -316,6 +480,12 @@ class EquivariantDecoder(nn.Module):
         )
 
         self.n_atom_basis = n_atom_basis
+
+        # sj edit
+        self.dense = nn.Sequential(nn.ReLU(), 
+                                   nn.Linear(n_atom_basis, 39), 
+                                   nn.ReLU(), 
+                                   nn.Linear(39, 39))
     
     def forward(self, cg_xyz, CG_nbr_list, mapping, H, mask=None):
     
@@ -345,6 +515,11 @@ class EquivariantDecoder(nn.Module):
             H = H + dH_update
             V = V + dV_update
 
+        # sj edit
+        V = V.sum(axis=-1)
+        V = V.reshape(-1,78)
+        V = self.dense(V)
+        V = V.reshape(-1,13,3)
         return H, V 
 
 
@@ -359,6 +534,9 @@ class EquiEncoder(nn.Module):
              dir_mp=False,
              cg_mp=False):
         super().__init__()
+
+        # self.atom_embed = nn.Embedding(100, 36, padding_idx=0)
+        # self.res_embed = nn.Embedding(30, 36, padding_idx=0)
         self.atom_embed = nn.Embedding(100, int(n_atom_basis/2), padding_idx=0)
         self.res_embed = nn.Embedding(30, int(n_atom_basis/2), padding_idx=0)
         
@@ -421,7 +599,7 @@ class EquiEncoder(nn.Module):
         self.cg_mp = cg_mp
         self.n_atom_basis = n_atom_basis
     
-    def forward(self, z, xyz, cg_z, cg_xyz, mapping, nbr_list, cg_nbr_list, ic):
+    def forward(self, z, xyz, cg_z, cg_xyz, mapping, nbr_list, cg_nbr_list):
         
         # atomic embedding
         if not self.dir_mp:
@@ -431,11 +609,16 @@ class EquiEncoder(nn.Module):
         h_atom = self.atom_embed(z.long())
         h_res = self.res_embed(cg_z[mapping].long())
         h = torch.cat([h_atom, h_res], axis=-1)
+
+        # h = self.res_embed(cg_z[mapping].long())
+        # h = torch.zeros(z.shape[0], 78).to(z.device)
         del z
 
         v = torch.zeros(h.shape[0], h.shape[1], 3).to(h.device)
 
         r_ij = xyz[nbr_list[:, 1]] - xyz[nbr_list[:, 0]]
+        # r_ij = torch.zeros_like(r_ij).to(h.device)
+
         # r_IJ = cg_xyz[cg_nbr_list[:, 1]] - xyz[cg_nbr_list[:, 0]]
         
         # edge features
@@ -670,7 +853,7 @@ class internalCGequiVAE(nn.Module):
 
         cg_nxyz = batch['CG_nxyz']
         cg_xyz = batch['CG_nxyz'][:, 1:]
-        cg_z = batch['CG_nxyz'][:, 0] # residue type
+        cg_z = batch['CG_nxyz'][:, 0].long()
         
         z = batch['nxyz'][:, 0] # atom type
 
@@ -683,6 +866,7 @@ class internalCGequiVAE(nn.Module):
 
         # Internal coordinates (ic) parameters
         ic = batch['ic']
+        # ic_type = batch['ic_type']
         
         return z, cg_z, xyz, cg_xyz, nbr_list, CG_nbr_list, mapping, num_CGs, ic, cg_nxyz
         
@@ -703,15 +887,15 @@ class internalCGequiVAE(nn.Module):
 
         return CG2atomChannel.detach()
             
-    def decoder(self, cg_xyz, CG_nbr_list, mapping, S_I, mask):
-        _, ic_recon = self.equivaraintconv(cg_xyz, CG_nbr_list, mapping, S_I, mask)
+    def decoder(self, cg_z, cg_xyz, CG_nbr_list, mapping, S_I, mask):
+        _, ic_recon = self.equivaraintconv(cg_z, cg_xyz, CG_nbr_list, mapping, S_I, mask)
         
         return ic_recon
         
     def forward(self, batch):
-
-        atomic_nums, cg_z, xyz, cg_xyz, nbr_list, CG_nbr_list, mapping, num_CGs, ic, cg_nxyz = self.get_inputs(batch)
-        S_I, s_i = self.encoder(atomic_nums, xyz, cg_z, cg_xyz, mapping, nbr_list, CG_nbr_list, ic)
+        z, cg_z, xyz, cg_xyz, nbr_list, CG_nbr_list, mapping, num_CGs, ic, cg_nxyz = self.get_inputs(batch)
+        # S_I, s_i = self.encoder(z, xyz, cg_z, cg_xyz, mapping, nbr_list, CG_nbr_list, ic)
+        S_I, _ = self.encoder(z, xyz, cg_z, cg_xyz, mapping, nbr_list, CG_nbr_list)
 
         # get prior based on CG conv 
         if self.prior_net:
@@ -725,13 +909,18 @@ class internalCGequiVAE(nn.Module):
         logvar = self.atom_sigmanet(z)
         sigma = 1e-12 + torch.exp(logvar / 2)
 
+        # print("encoder m", mu.mean(), mu.var())
+        # print("prior m", H_prior_mu.mean(), H_prior_mu.var())
+        # print("encoder e", sigma.mean(), sigma.var())
+        # print("prior e", H_prior_sigma.mean(), H_prior_sigma.var())
+
         if not self.det: 
             z_sample = self.reparametrize(mu, sigma)
         else:
             z_sample = z
 
         S_I = z_sample # s_i not used in decoding 
-        ic_recon = self.decoder(cg_xyz, CG_nbr_list, mapping, S_I, mask=None)
+        ic_recon = self.decoder(cg_z, cg_xyz, CG_nbr_list, mapping, S_I, mask=None)
         
         return mu, sigma, H_prior_mu, H_prior_sigma, ic, ic_recon
 
@@ -843,82 +1032,3 @@ class multiCGequiVAE(nn.Module):
         
         return mu, sigma, H_prior_mu, H_prior_sigma, xyz, xyz_recon
     
-class PCN(nn.Module):
-    '''Protein Completion Networks'''
-    def __init__(self, equivaraintconv, feature_dim, offset=True):
-        nn.Module.__init__(self)
-
-        self.equivaraintconv = equivaraintconv
-        self.offset = offset
-        self.embedding = nn.Embedding(100, feature_dim, padding_idx=0)
-        
-    def get_inputs(self, batch):
-
-        xyz = batch['xyz']
-        cg_xyz = batch['ca_xyz']
-        cg_z = batch['res']
-        mapping = batch['cg_map']
-        #dihe = batch['dihe_idxs']
-        nbr_list = batch['bond_edge_list']
-        CG_nbr_list = batch['CG_nbr_list']
-        num_CGs = [len(seq) for seq in batch['seq']] 
-        
-        return cg_z, xyz, cg_xyz, nbr_list, CG_nbr_list, mapping, num_CGs
-        
-    def CG2ChannelIdx(self, CG_mapping):
-
-        CG2atomChannel = torch.zeros_like(CG_mapping)#.to("cpu")
-
-        for cg_type in torch.unique(CG_mapping): 
-            cg_filter = CG_mapping == cg_type
-            num_contri_atoms = cg_filter.sum().item()
-            CG2atomChannel[cg_filter] = torch.LongTensor(list(range(num_contri_atoms)))#.to(CG_mapping.device)
-            
-        return CG2atomChannel.detach()
-            
-    def decoder(self, cg_xyz, CG_nbr_list, S_I, ca_idx, mapping, num_CGs):
-        
-        cg_s, cg_v = self.equivaraintconv(cg_xyz, CG_nbr_list, mapping, S_I)
-
-        CG2atomChannel = self.CG2ChannelIdx(mapping)
-
-        # implement an non-equivariant decoder 
-        xyz_rel = cg_v[mapping, CG2atomChannel, :]
-
-        #this constraint is only true for geometrical mean
-        # need to include weights 
-
-        # if self.offset:
-        #   decode_offsets = scatter_mean(xyz_rel, mapping, dim=0)
-        #   xyz_rel = xyz_rel - decode_offsets[mapping]
-
-        # recentering 
-        #ca_idx = batch['ca_idx'] #self.get_ca_idx(mapping)
-
-        # edge case for some weird data
-        if ca_idx[-1].item() < xyz_rel.shape[0]:
-            offset = torch.clone( xyz_rel[ca_idx] ) 
-            xyz_rel[ca_idx] -= offset 
-
-        # reconstruct coordinates 
-        xyz_recon = xyz_rel + cg_xyz[mapping]
-
-        return xyz_recon
-
-    # def get_ca_idx(self, mapping):
-    #     ca_idx = [1]
-    #     current = 0
-    #     for i, item in enumerate(mapping):
-    #         if item.item() != current:
-    #             ca_idx.append(i + 1)
-    #         current = item.item()
-
-    #     return torch.LongTensor(ca_idx)
-        
-    def forward(self, batch):
-        cg_z, xyz, cg_xyz, nbr_list, CG_nbr_list, mapping, num_CGs = self.get_inputs(batch)
-
-        S_I = self.embedding(cg_z.to(torch.long))
-        xyz_recon = self.decoder(cg_xyz, CG_nbr_list, S_I, batch['ca_idx'], mapping, num_CGs)
-
-        return None, None, None, None, xyz, xyz_recon
