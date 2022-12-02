@@ -1,13 +1,12 @@
-from ase import io, Atoms
-import numpy as np
-import torch
-import mdshare
-import pyemma
 from tqdm import tqdm
+import numpy as np
+import mdshare
+# import pyemma
+from ase import io, Atoms
+
+import torch
 from torch_scatter import scatter_mean
-#import xyz2mol
-from ase import io
-#from rdkit import Chem 
+
 from utils_ic import *
 
 COVCUTOFFTABLE = {1: 0.23,
@@ -456,7 +455,7 @@ def sample_ic(loader, device, model, atomic_nums, n_cgs, info_dict=None, tqdm_fl
         batch = batch_to(batch, device)
 
         atomic_nums, cg_z, xyz, cg_xyz, nbr_list, CG_nbr_list, mapping, num_CGs, ic, cg_nxyz = model.get_inputs(batch)
-        # atomic_nums = z.detach().cpu().numpy()
+
         nres = batch['num_CGs'][0]+2
         OG_CG_nxyz = batch['OG_CG_nxyz'].reshape(-1, nres, 4)
 
@@ -470,7 +469,7 @@ def sample_ic(loader, device, model, atomic_nums, n_cgs, info_dict=None, tqdm_fl
             H = z 
             h = z 
 
-            ic_recon = model.decoder(cg_xyz, CG_nbr_list, mapping, z, mask=None)    
+            ic_recon = model.decoder(cg_z, cg_xyz, CG_nbr_list, mapping, z, mask=None)    
             recon_ics[ens].append(ic_recon.detach().cpu().numpy())
 
             ic_recon = ic_recon.reshape(-1, nres-2, 13, 3)

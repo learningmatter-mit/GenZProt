@@ -16,22 +16,24 @@ import statsmodels.api as sm
 import pickle
 from sklearn.model_selection import KFold
 
+
 import torch
 from torch import nn
 from torch.nn import Sequential 
 from torch_scatter import scatter_mean
 from torch.utils.data import DataLoader
 
-import CoarseGrainingVAE
-from CoarseGrainingVAE.data import CGDataset, CG_collate
-from CoarseGrainingVAE.cgvae import SequentialDecoder, MLPDecoder, internalEquivariantPsuedoDecoder, EquiEncoder, CGprior, internalCGequiVAE 
-from CoarseGrainingVAE.e3nn_enc import e3nnEncoder, e3nnPrior
-from CoarseGrainingVAE.conv import * 
-from CoarseGrainingVAE.datasets import load_protein_traj, get_atomNum, get_cg_and_xyz, build_ic_multiprotein_dataset  
+sys.path.append("../Peptide_backmap/")
+# import CoarseGrainingVAE
+from data import CGDataset, CG_collate
+from cgvae import MLPDecoder, internalCGequiVAE
+from e3nn_enc import e3nnEncoder, e3nnPrior
+from conv import * 
+from datasets import load_protein_traj, get_atomNum, get_cg_and_xyz, build_ic_multiprotein_dataset, create_info_dict  
+from visualization import xyz_grid_view, rotate_grid, save_rotate_frames
 from utils import * 
-from CoarseGrainingVAE.visualization import xyz_grid_view, rotate_grid, save_rotate_frames
+from utils_ic import *
 from sampling import sample_ic as sample
-
 
 
 # set random seed 
@@ -120,30 +122,7 @@ def run_cv(params):
     device = 3
     batch_size = 8
     dataset_label_list = [params['test_data']]
-
-    traj_list, n_cg_list, info_dict = [], [], {}
-    for idx, label in enumerate(dataset_label_list):
-        traj = shuffle_traj(load_protein_traj(label))
-        table, _ = traj.top.to_dataframe()
-        reslist = list(set(list(table.resSeq)))
-        reslist.sort()
-
-        n_cg = len(reslit)
-        n_cg_list.append(n_cg)
-
-        atomic_nums, protein_index = get_atomNum(traj)
-        traj_list.append(traj)
-
-        atomn = [list(table.loc[table.resSeq==res].name) for res in reslist][1:-1]
-        resn = list(table.loc[table.name=='CA'].resName)[1:-1]
-        info_dict[idx] = (atomn, resn)
-
-    nfirst = len(table.loc[table.resSeq==table.resSeq.min()])
-    nlast = len(table.loc[table.resSeq==table.resSeq.max()])
-    n_atoms = atomic_nums.shape[0]
-    n_atoms = n_atoms - (nfirst+nlast)
-    atomic_nums = atomic_nums[nfirst:-nlast]
-    """"""
+    n_cg_list, traj_list, info_dict = create_info_dict(dataset_label_list)
 
     # create subdirectory 
     create_dir(working_dir)     
@@ -174,6 +153,15 @@ def run_cv(params):
 
         testset_list = []
         for i, traj in enumerate(traj_list):
+            atomic_nums, protein_index = get_atomNum(traj)
+            table, _ = traj.top.to_dataframe()
+            nfirst = len(table.loc[table.resSeq==table.resSeq.min()])
+            nlast = len(table.loc[table.resSeq==table.resSeq.max()])
+
+            n_atoms = atomic_nums.shape[0]
+            n_atoms = n_atoms - (nfirst+nlast)
+            atomic_nums = atomic_nums[nfirst:-nlast]
+
             all_idx = np.arange(len(traj))
             random.shuffle(all_idx)
             all_idx = all_idx[:ndata]

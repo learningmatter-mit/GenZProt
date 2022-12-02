@@ -1,5 +1,6 @@
 import os 
 import sys
+import time
 from tqdm import tqdm 
 from datetime import date
 
@@ -122,14 +123,15 @@ def loop(loader, optimizer, device, model, beta, epoch,
     zeta = 0.0
     beta = 10.0
 
-    if epoch > 4 or not train:
+    if epoch > 0 or not train:
         delta, gamma, zeta = 20, 0.5, 0.5
 
     for i, batch in enumerate(loader):
         batch = batch_to(batch, device)
-
+        st = time.time()
         if ic_flag:
             S_mu, S_sigma, H_prior_mu, H_prior_sigma, ic, ic_recon = model(batch)
+            xyz, xyz_recon = None, None
         else:
             S_mu, S_sigma, H_prior_mu, H_prior_sigma, xyz, xyz_recon = model(batch)
    
@@ -184,17 +186,22 @@ def loop(loader, optimizer, device, model, beta, epoch,
                 loss_graph = (gen_dist - data_dist).pow(2).mean()
                 print("graph    : ", "{:.5f}".format(loss_graph.item()))
                 loss_recon += loss_graph * gamma 
+            else:
+                loss_graph = torch.Tensor([0.0]).to(device)
 
             if delta != 0.0:
                 nbr_list = batch['nbr_list']
                 combined = torch.cat((edge_list, nbr_list))
                 uniques, counts = combined.unique(dim=0, return_counts=True)
                 difference = uniques[counts == 1]
+                # difference = nbr_list
                 print("n nbrs   : ", difference.shape[0])
                 nbr_dist = ((xyz_recon[difference[:, 0]] - xyz_recon[difference[:, 1]]).pow(2).sum(-1) + EPS).sqrt()
                 loss_nbr = torch.maximum(2.1 - nbr_dist,torch.Tensor([0.0]).to(xyz.device)).mean()
                 print("nbr      : ", "{:.5f}".format(loss_nbr.item()))
                 loss_recon += loss_nbr * delta
+            else:
+                loss_nbr = torch.Tensor([0.0]).to(device)
             
             # add interaction loss
             if zeta != 0.0:                
@@ -204,11 +211,9 @@ def loop(loader, optimizer, device, model, beta, epoch,
                 loss_inter = torch.maximum(inter_dist - 4.0, torch.Tensor([0.0]).to(xyz.device)).mean()
                 print("inter    : ", "{:.5f}".format(loss_inter.item())) 
                 loss_recon += loss_inter * zeta
-                
             else:
-                loss_graph = torch.Tensor([0.0]).to(device)
-                loss_nbr = torch.Tensor([0.0]).to(device)
                 loss_inter = torch.Tensor([0.0]).to(device)
+                
         else:
             loss_graph = torch.Tensor([0.0]).to(device)
             loss_nbr = torch.Tensor([0.0]).to(device)
@@ -220,7 +225,9 @@ def loop(loader, optimizer, device, model, beta, epoch,
         h = nvmlDeviceGetHandleByIndex(0)
         info = nvmlDeviceGetMemoryInfo(h)
         print(f'memory usage : ', "{:.5f} %".format(info.used*100/info.total))
-        print(f"---------------------------")
+        end = time.time()
+        print('time     : ', end-st)
+        # print(f"---------------------------")
         # memory = 0
 
         # if loss.item() >= gamma * 200.0 or torch.isnan(loss):
@@ -238,8 +245,8 @@ def loop(loader, optimizer, device, model, beta, epoch,
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.01)
             optimizer.step()
 
-        else:
-            loss.backward()
+        # else:
+            # loss.backward()
 
         # logging 
         # recon_loss.append(loss_recon.item())

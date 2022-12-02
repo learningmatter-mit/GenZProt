@@ -1,36 +1,83 @@
-import torch
-import mdtraj as md
-import numpy as np
 import copy
+import torch
+import numpy as np
+import mdtraj as md
 
-core_sc = \
-{'ALA': ['CB'],
- 'ARG': ['CB', 'CG', 'CD', 'NE', 'HE', 'CZ', 'NH1', 'NH2'],
- 'ASP': ['CB', 'CG', 'OD1', 'OD2'],
- 'ASN': ['CB', 'CG', 'OD1', 'ND2'],
- 'CYS': ['CB', 'SG'],
- 'GLU': ['CB', 'CG', 'CD', 'OE1', 'OE2'],
- 'GLN': ['CB', 'CG', 'CD', 'OE1', 'NE2', 'HE21', 'HE22'],
- 'GLY': [],
- 'HIS': ['CB', 'CG', 'ND1', 'CE1', 'NE2', 'CD2'],
- 'ILE': ['CB', 'CG2', 'CG1', 'CD1'],
- 'LEU': ['CB', 'CG', 'CD1', 'CD2'],
- 'LYS': ['CB', 'CG', 'CD', 'CE', 'NZ'],
- 'MET': ['CB', 'CG', 'SD', 'CE'],
- 'PHE': ['CB', 'CG', 'CD1', 'CE1', 'CZ', 'CE2', 'CD2'],
- 'PRO': ['CB', 'CG', 'CD'],
- 'SER': ['CB', 'OG', 'HG'],
- 'THR': ['CB', 'OG1', 'HG1', 'CG2'],
- 'TRP': ['CB', 'CG', 'CD2', 'CD1', 'NE1', 'CE2', 'CZ2', 'CH2', 'CZ3', 'CE3'],
- 'TYR': ['CB', 'CG', 'CD1', 'CE1', 'CZ', 'CE2', 'CD2', 'OH', 'HH', ],
- 'VAL': ['CB', 'CG1', 'CG2']
+
+core_atoms = \
+{
+'ALA': ['O','N','C','CA','CB'],
+'ARG': ['O','N','C','CA','CB','CG','CD','NE','CZ','NH1','NH2'],
+'ASP': ['O','N','C','CA','CB','CG','OD1','OD2'],
+'ASN': ['O','N','C','CA','CB','CG','OD1','ND2'],
+'CYS': ['O','N','C','CA','CB','SG'],
+'GLU': ['O','N','C','CA','CB','CG','CD','OE1','OE2'],
+'GLN': ['O','N','C','CA','CB','CG','CD','OE1','NE2'],
+'GLY': ['O','N','C','CA'],
+'HIS': ['O','N','C','CA','CB','CG','CD2','ND1','NE2','CE1'],
+'ILE': ['O','N','C','CA','CB','CG1','CG2','CD1'],
+'LEU': ['O','N','C','CA','CB','CG','CD1','CD2'],
+'LYS': ['O','N','C','CA','CB','CG','CD','CE','NZ'],
+'MET': ['O','N','C','CA','CB','CG','SD','CE'],
+'PHE': ['O','N','C','CA','CB','CG','CD1','CE1','CZ','CD2','CE2'],
+'PRO': ['O','N','C','CA','CB','CG','CD'],
+'SER': ['O','N','C','CA','CB','OG'],
+'THR': ['O','N','C','CA','CB','OG1','CG2'],
+'TRP': ['O','N','C','CA','CB','CG','CD1','CD2','NE1','CE2','CZ2','CH2','CE3','CZ3'],
+'TYR': ['O','N','C','CA','CB','CG','CD1','CD2','CE2','CZ','CE1','OH'],
+'VAL': ['O','N','C','CA','CB','CG1','CG2']
 }
 
-copy_core = copy.deepcopy(core_sc)
-for key in copy_core.keys():
-    copy_core[key] = np.array(['O', 'N', 'C', 'CA'] + copy_core[key])
+atom_order_list = \
+{'ALA': [[1, 2, 3]],
+ 'ARG': [[1, 2, 3],
+  [2, 3, 4],
+  [3, 4, 5],
+  [4, 5, 6],
+  [5, 6, 7],
+  [6, 7, 8],
+  [6, 7, 8]],
+ 'ASP': [[1, 2, 3], [2, 3, 4], [3, 4, 5], [3, 4, 5]],
+ 'ASN': [[1, 2, 3], [2, 3, 4], [3, 4, 5], [3, 4, 5]],
+ 'CYS': [[1, 2, 3], [2, 3, 4]],
+ 'GLU': [[1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6], [4, 5, 6]],
+ 'GLN': [[1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6], [4, 5, 6]],
+ 'GLY': [],
+ 'HIS': [[1, 2, 3], [2, 3, 4], [3, 4, 5], [3, 4, 5], [7, 5, 6], [5, 6, 8]],
+ 'ILE': [[1, 2, 3], [2, 3, 4], [2, 3, 4], [3, 4, 5]],
+ 'LEU': [[1, 2, 3], [2, 3, 4], [3, 4, 5], [3, 4, 5]],
+ 'LYS': [[1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6], [5, 6, 7]],
+ 'MET': [[1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]],
+ 'PHE': [[1, 2, 3],
+  [2, 3, 4],
+  [3, 4, 5],
+  [4, 5, 6],
+  [5, 6, 7],
+  [3, 4, 5],
+  [4, 5, 9]],
+ 'PRO': [[1, 2, 3], [1, 3, 4], [4, 3, 1]],
+ 'SER': [[1, 2, 3], [2, 3, 4]],
+ 'THR': [[1, 2, 3], [2, 3, 4], [2, 3, 4]],
+ 'TRP': [[1, 2, 3],
+  [2, 3, 4],
+  [3, 4, 5],
+  [3, 4, 5],
+  [7, 5, 6],
+  [6, 5, 7],
+  [5, 7, 9],
+  [7, 9, 10],
+  [10, 9, 7],
+  [9, 7, 12]],
+ 'TYR': [[1, 2, 3],
+  [2, 3, 4],
+  [3, 4, 5],
+  [3, 4, 5],
+  [6, 5, 7],
+  [5, 7, 8],
+  [7, 8, 9],
+  [7, 8, 9]],
+ 'VAL': [[1, 2, 3], [2, 3, 4], [2, 3, 4]]}
 
-# TRP ['CB', 'CG', 'CD1', 'NE1', 'CE2', 'CD2', 'CE3', 'CZ3', 'CH2', 'CZ2']
 
 IDX2THR = {0: 'ASN',
  1: 'HIS',
@@ -70,7 +117,6 @@ def unit_vector(vector):
 
 def angle_between(v1, v2):
     """ Returns the angle in radians between vectors 'v1' and 'v2'::
-
             >>> angle_between((1, 0, 0), (0, 1, 0))
             1.5707963267948966
             >>> angle_between((1, 0, 0), (1, 0, 0))
@@ -112,7 +158,7 @@ def dihedral(p):
     y = np.diagonal(np.dot(np.cross(b1, v), w.T))
     return np.arctan2(y, x)
 
-def get_sidechain_ic(traj):
+def get_sidechain_ic_(traj):
     table, _ = traj.top.to_dataframe()   
     res_list = list(set(list(table.resSeq)))
     res_list.sort()
@@ -123,7 +169,7 @@ def get_sidechain_ic(traj):
         rest = table.loc[table.resSeq==res_list[i]]
         if len(rest) > 0: 
             resn = rest.resName.values[0]
-            atom_list = ['N', 'C', 'CA'] + core_sc[resn] 
+            atom_list = ['N', 'C', 'CA'] + core_sc[resn]
             atom_idx = [rest.loc[rest.name==atom].index[0] for atom in atom_list]
             restraj = traj.atom_slice(atom_idx)
             tb, _ = restraj.top.to_dataframe()
@@ -142,13 +188,44 @@ def get_sidechain_ic(traj):
     tot_ic = np.stack(tot_ic, axis=0).transpose(2, 0, 1, 3)
     return tot_ic
 
+def get_sidechain_ic(traj):
+    table, _ = traj.top.to_dataframe()   
+    res_list = list(set(list(table.resSeq)))
+    res_list.sort()
+    n_res = len(res_list)
+    tot_ic = []
+    for i in range(1,n_res-1):
+        rest = table.loc[table.resSeq==res_list[i]]
+        if len(rest) > 0: 
+            resn = rest.resName.values[0]
+            atom_list = core_atoms[resn]
+            atom_idx = [rest.loc[rest.name==atom].index[0] for atom in atom_list]
+            restraj = traj.atom_slice(atom_idx)
+            tb, _ = restraj.top.to_dataframe()
+            resxyz = restraj.xyz
+            
+            ic_i = np.zeros((10, resxyz.shape[0], 3))
+            for j in range(len(core_atoms[resn])-4):
+                order = atom_order_list[resn][j]      
+                A1, A2, A3, A4 = resxyz[:, j+4], resxyz[:, order[2]], resxyz[:, order[1]], resxyz[:, order[0]]       
+                # get dist, ang, tor
+                dist = np.sqrt(((A1 - A2)**2).sum(-1))
+                ang = angle_between(A1 - A2, A3 - A2)
+                tor = dihedral([A1, A2, A3, A4])
+                tor = ((tor + np.pi) % (2 * np.pi)) - np.pi
+                ic_i[j] = np.stack([dist, ang, tor],axis=-1).reshape(resxyz.shape[0], 3)
+            
+            tot_ic.append(ic_i)
+
+    tot_ic = np.stack(tot_ic, axis=0).transpose(2, 0, 1, 3)
+    return tot_ic
 
 def get_backbone_ic(traj):
     CA = traj.top.select('name CA')
     C = traj.top.select('name C')
     N = traj.top.select('name N')
     O = traj.top.select('name O')
-    
+
     C_torsion = md.compute_dihedrals(traj, np.stack((C[1:-1], CA[1:-1], CA[2:], CA[:-2]), axis=-1))[..., None]
     N_torsion = md.compute_dihedrals(traj, np.stack((N[1:-1], CA[1:-1], CA[:-2], CA[2:]), axis=-1))[..., None]
     O_torsion = md.compute_dihedrals(traj, np.stack((O[1:-1], C[1:-1], CA[1:-1], N[1:-1]), axis=-1))[..., None]
@@ -165,7 +242,7 @@ def get_backbone_ic(traj):
     N_ic = np.stack((N_dist, N_angle, N_torsion), axis=-1) # 75, 126, 1, 3
     O_ic = np.stack((O_dist, O_angle, O_torsion), axis=-1) # 75, 126, 1, 3
 
-    all_ic = np.stack((N_ic, C_ic, O_ic), axis=2).squeeze() # 75, 126, 3, 3
+    all_ic = np.stack((N_ic, C_ic, O_ic), axis=2).squeeze(axis=-2) # 75, 126, 3, 3
     return all_ic  
 
 
@@ -211,6 +288,35 @@ def add_atom_to_xyz(newatom_ic, ref_atoms):
 
 
 def ic_to_xyz(CG_nxyz, ic_recon, info):
+    permute, atom_idx, atom_orders = info
+    atom_orders = atom_orders.to(ic_recon.device)
+    CG_xyz = CG_nxyz[:, :, 1:]
+    
+    N = add_atom_to_xyz(ic_recon[:,:,0], [CG_xyz[:,1:-1], CG_xyz[:,:-2], CG_xyz[:,2:]])
+    C = add_atom_to_xyz(ic_recon[:,:,1], [CG_xyz[:,1:-1], CG_xyz[:,2:], CG_xyz[:,:-2]])
+    O = add_atom_to_xyz(ic_recon[:,:,2], [C, CG_xyz[:,1:-1], N])
+    xyz_recon = torch.stack((O, N, C, CG_xyz[:,1:-1]), axis=2) # O, N, C, CA
+    
+    bs = CG_xyz.shape[0]
+    for i in range(10):
+        current_ic = ic_recon[:,:,3+i]
+
+        current_order1 = atom_orders[i,:,2].reshape(1, -1, 1, 1).repeat(bs, 1, 1, 3)
+        current_order2 = atom_orders[i,:,1].reshape(1, -1, 1, 1).repeat(bs, 1, 1, 3)
+        current_order3 = atom_orders[i,:,0].reshape(1, -1, 1, 1).repeat(bs, 1, 1, 3)
+
+        atom1 = torch.gather(xyz_recon, dim=2, index=current_order1).squeeze()
+        atom2 = torch.gather(xyz_recon, dim=2, index=current_order2).squeeze()
+        atom3 = torch.gather(xyz_recon, dim=2, index=current_order3).squeeze()
+        
+        new_atom = add_atom_to_xyz(current_ic, [atom1, atom2, atom3]).unsqueeze(2)
+        xyz_recon = torch.cat([xyz_recon, new_atom], axis=2)
+        
+    xyz_recon = xyz_recon.reshape(xyz_recon.shape[0],-1,3)[:,atom_idx,:][:,permute,:]
+    return xyz_recon
+
+
+def ic_to_xyz_(CG_nxyz, ic_recon, info):
     CG_xyz = CG_nxyz[:, :, 1:]
 
     atomn, resn = info

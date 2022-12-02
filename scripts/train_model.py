@@ -17,14 +17,16 @@ from sklearn.model_selection import KFold
 import pandas as pd
 import statsmodels.api as sm
 
-import CoarseGrainingVAE
-from CoarseGrainingVAE.data import CGDataset, CG_collate
-from CoarseGrainingVAE.cgvae import SequentialDecoder, MLPDecoder, EquivariantDecoder, internalEquivariantPsuedoDecoder, EquiEncoder, CGprior, internalCGequiVAE
-from CoarseGrainingVAE.e3nn_enc import e3nnEncoder, e3nnPrior
-from CoarseGrainingVAE.conv import * 
-from CoarseGrainingVAE.datasets import load_protein_traj, get_atomNum, get_cg_and_xyz, build_ic_multiprotein_dataset  
-from CoarseGrainingVAE.visualization import xyz_grid_view, rotate_grid, save_rotate_frames
+sys.path.append("../Peptide_backmap/")
+# import CoarseGrainingVAE
+from data import CGDataset, CG_collate
+from cgvae import MLPDecoder, internalCGequiVAE
+from e3nn_enc import e3nnEncoder, e3nnPrior
+from conv import * 
+from datasets import load_protein_traj, get_atomNum, get_cg_and_xyz, build_ic_multiprotein_dataset, create_info_dict  
+from visualization import xyz_grid_view, rotate_grid, save_rotate_frames
 from utils import * 
+from utils_ic import *
 from sampling import * 
 
 
@@ -123,32 +125,16 @@ def run_cv(params):
 
     print('cuda: ', torch.cuda.is_available())
 
-    prefix = 'cc_'
+    prefix = 'PED'
     dataset_label_list = []
-    PED_PDBs = glob.glob(f'../data/md_pdbfiles/used/exp/{prefix}*.pdb')
+    PED_PDBs = glob.glob(f'../data/processed/{prefix}*.pdb')
     for PDBfile in PED_PDBs:
         ID = PDBfile.split('/')[-1].split('.')[0][len(prefix):]
         dataset_label_list.append(ID)
-    # dataset_label_list = ['PED00003_0'] 
     print("train data list: ", dataset_label_list)
+    dataset_label_list = dataset_label_list[1:]
 
-    n_cg_list, traj_list, info_dict = [], [], {} 
-    for idx, label in enumerate(dataset_label_list):
-        traj = shuffle_traj(load_protein_traj(label))
-        table, _ = traj.top.to_dataframe()
-        reslist = list(set(list(table.resSeq)))
-        reslist.sort()
-        
-        n_cg = len(reslist)
-        n_cg_list.append(n_cg)
-
-        atomic_nums, protein_index = get_atomNum(traj)
-        traj_list.append(traj)
-
-        atomn = [list(table.loc[table.resSeq==res].name) for res in reslist][1:-1]
-        resn = list(table.loc[table.name=='CA'].resName)[1:-1]
-        info_dict[idx] = (atomn, resn)
-        print("loaded ", label)
+    n_cg_list, traj_list, info_dict = create_info_dict(dataset_label_list)
 
     # create subdirectory 
     create_dir(working_dir)     
@@ -177,22 +163,25 @@ def run_cv(params):
 
         trainset_list, valset_list, testset_list = [], [], []
         for i, traj in enumerate(traj_list):
-            n_train, n_val, n_test = int(len(traj)*0.8), int(len(traj)*0.1), int(len(traj)*0.1)
-            all_idx = np.arange(len(traj))
-            random.shuffle(all_idx)
-            train_index, val_index, test_index = all_idx[:n_train], all_idx[n_train:n_train+n_val], all_idx[n_train+n_val:]
+            try:
+                n_train, n_val, n_test = int(len(traj)*0.8), int(len(traj)*0.1), int(len(traj)*0.1)
+                all_idx = np.arange(len(traj))
+                random.shuffle(all_idx)
+                train_index, val_index, test_index = all_idx[:n_train], all_idx[n_train:n_train+n_val], all_idx[n_train+n_val:]
 
-            n_cgs = n_cg_list[i]
-            trainset, mapping = build_split_dataset(traj[train_index], params, mapping=None, n_cgs=n_cgs, prot_idx=i)
-            true_n_cgs = len(list(set(mapping.tolist())))
+                n_cgs = n_cg_list[i]
+                trainset, mapping = build_split_dataset(traj[train_index], params, mapping=None, n_cgs=n_cgs, prot_idx=i)
+                true_n_cgs = len(list(set(mapping.tolist())))
 
-            valset, mapping = build_split_dataset(traj[val_index], params, mapping, prot_idx=i)
-            testset, mapping = build_split_dataset(traj[test_index], params, mapping, prot_idx=i)
-            print("created dataset-------", dataset_label_list[i])
+                valset, mapping = build_split_dataset(traj[val_index], params, mapping, prot_idx=i)
+                testset, mapping = build_split_dataset(traj[test_index], params, mapping, prot_idx=i)
+                print("created dataset-------", dataset_label_list[i])
 
-            trainset_list.append(trainset)
-            valset_list.append(valset)
-            testset_list.append(testset)
+                trainset_list.append(trainset)
+                valset_list.append(valset)
+                testset_list.append(testset)
+            except:
+                print("failed to create dataset--", dataset_label_list[i])
 
         trainset = torch.utils.data.ConcatDataset(trainset_list)
         valset = torch.utils.data.ConcatDataset(valset_list)
@@ -297,7 +286,9 @@ def run_cv(params):
 
             if savemodel and epoch%5==0:
                 torch.save(model.state_dict(), os.path.join(split_dir, 'model.pt'))
-
+        
+        print("finished training")
+        exit(-1)
     return cv_stats_pd['test_all_recon'].mean(), cv_stats_pd['test_all_recon'].std(), cv_stats_pd['recon_all_ged'].mean(), cv_stats_pd['recon_all_ged'].std(), failed
 
 
