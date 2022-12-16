@@ -28,9 +28,13 @@ def shuffle_traj(traj):
     full_idx = shuffle(full_idx)
     return traj[full_idx]
 
-def annotate_job(task, job_name, N_cg):
+# def annotate_job(task, job_name, N_cg):
+#     today = date.today().strftime('%m-%d')
+#     return "{}_{}_{}_N{}".format(job_name, today, task, N_cg)
+
+def annotate_job(task, job_name):
     today = date.today().strftime('%m-%d')
-    return "{}_{}_{}_N{}".format(job_name, today, task, N_cg)
+    return "{}_{}_{}".format(job_name, today, task)
 
 def create_dir(name):
     if not os.path.isdir(name):
@@ -95,8 +99,8 @@ def KL(mu1, std1, mu2, std2):
             torch.log(std2.pow(2)).sum(-1) - torch.log(std1.pow(2)).sum(-1) - std1.shape[-1] ).mean()
 
 
-def loop(loader, optimizer, device, model, beta, epoch, 
-        gamma, eta=0.0, kappa=0.0, train=True, looptext='', tqdm_flag=True, ic_flag=False, info_dict=None):
+def loop(loader, optimizer, device, model, beta, gamma, delta, eta, epoch, 
+         train=True, looptext='', tqdm_flag=True, ic_flag=False, info_dict=None, prefix=''):
     
     total_loss = []
     recon_loss = []
@@ -117,14 +121,9 @@ def loop(loader, optimizer, device, model, beta, epoch,
     if tqdm_flag:
         loader = tqdm(loader, position=0, file=sys.stdout,
                          leave=True, desc='({} epoch #{})'.format(mode, epoch))
-    
-    delta = 0.0
-    gamma = 0.0
-    zeta = 0.0
-    beta = 10.0
-
-    if epoch > 0 or not train:
-        delta, gamma, zeta = 20, 0.5, 0.5
+                         
+    if train and epoch < 3:
+        gamma, delta, eta = 0.0, 0.0, 0.0
 
     for i, batch in enumerate(loader):
         batch = batch_to(batch, device)
@@ -136,6 +135,7 @@ def loop(loader, optimizer, device, model, beta, epoch,
             S_mu, S_sigma, H_prior_mu, H_prior_sigma, xyz, xyz_recon = model(batch)
    
         if S_mu is not None:
+
             loss_kl = KL(S_mu, S_sigma, H_prior_mu, H_prior_sigma) 
             kl_loss.append(loss_kl.item())
         else:
@@ -149,11 +149,11 @@ def loop(loader, optimizer, device, model, beta, epoch,
 
             loss_bond = ((torch.absolute(ic_recon[:,:,0]) - ic[:,:,0]).reshape(-1)) * mask_batch
             loss_angle = (2*(1 - torch.cos(ic[:,:,1] - ic_recon[:,:,1])) + EPS).sqrt().reshape(-1) * mask_batch 
-            loss_torsion_ = (2*(1 - torch.cos(ic[:,:,2] - ic_recon[:,:,2])) + EPS).sqrt().reshape(-1) * mask_batch 
+            loss_torsion = (2*(1 - torch.cos(ic[:,:,2] - ic_recon[:,:,2])) + EPS).sqrt().reshape(-1) * mask_batch 
 
             loss_bond = loss_bond.pow(2).sum()/natom_batch
             loss_angle = loss_angle.sum()/natom_batch
-            loss_torsion = loss_torsion_.sum()/natom_batch
+            loss_torsion = loss_torsion.sum()/natom_batch
             print("bond     : ", "{:.5f}".format(loss_bond.item()))
             print("angle    : ", "{:.5f}".format(loss_angle.item()))
             print("torsion  : ", "{:.5f}".format(loss_torsion.item()))
@@ -164,25 +164,38 @@ def loop(loader, optimizer, device, model, beta, epoch,
 
         else:
             loss_recon = (xyz_recon - xyz).pow(2).mean()
+            print("xyz      : ", "{:.5f}".format(loss_recon.item()))
+            recon_loss.append(loss_recon.item())
 
         if batch['prot_idx'][0] == batch['prot_idx'][-1]:
-            nres = batch['num_CGs'][0]+2
-            xyz = batch['nxyz'][:, 1:]
+            if ic_flag:
+                nres = batch['num_CGs'][0]+2
+                xyz = batch['nxyz'][:, 1:]
 
-            OG_CG_nxyz = batch['OG_CG_nxyz'].reshape(-1, nres, 4)
-            ic_recon = ic_recon.reshape(-1, nres-2, 13, 3)
+                OG_CG_nxyz = batch['OG_CG_nxyz'].reshape(-1, nres, 4)
+                ic_recon = ic_recon.reshape(-1, nres-2, 13, 3)
 
-            info = info_dict[int(batch['prot_idx'][0])]
-            xyz_recon = ic_to_xyz(OG_CG_nxyz, ic_recon, info).reshape(-1,3)
-            loss_xyz = (xyz_recon - xyz).pow(2).mean()
-            print("xyz      : ", "{:.5f}".format(loss_xyz.item()))
+                info = info_dict[int(batch['prot_idx'][0])]
+                xyz_recon = ic_to_xyz(OG_CG_nxyz, ic_recon, info).reshape(-1,3)
+                
+                mask_xyz = batch['mask_xyz_list']
+                xyz[mask_xyz] *= 0
+                xyz_recon[mask_xyz] *= 0
+                
+                loss_xyz = (xyz_recon - xyz).pow(2).sum(-1).mean()
+                print("xyz      : ", "{:.5f}".format(loss_xyz.item()))
             
             # add graph loss 
             if gamma != 0.0:
-                edge_list = batch['bond_edge_list']
+                if prefix == 'hyper_':
+                    edge_list = batch['hyper_bond_edge_list']
+                else:
+                    edge_list = batch['bond_edge_list']
                 print("n edges  : ", edge_list.shape[0])
                 gen_dist = ((xyz_recon[edge_list[:, 0]] - xyz_recon[edge_list[:, 1]]).pow(2).sum(-1) + EPS).sqrt()
                 data_dist = ((xyz[edge_list[:, 0 ]] - xyz[edge_list[:, 1 ]]).pow(2).sum(-1) + EPS).sqrt()
+                # print(gen_dist[:10])
+                # print(data_dist[:10])
                 loss_graph = (gen_dist - data_dist).pow(2).mean()
                 print("graph    : ", "{:.5f}".format(loss_graph.item()))
                 loss_recon += loss_graph * gamma 
@@ -190,27 +203,33 @@ def loop(loader, optimizer, device, model, beta, epoch,
                 loss_graph = torch.Tensor([0.0]).to(device)
 
             if delta != 0.0:
-                nbr_list = batch['nbr_list']
+                if prefix == 'hyper_':
+                    nbr_list = batch['CG_nbr_list']
+                else:
+                    nbr_list = batch['nbr_list']
                 combined = torch.cat((edge_list, nbr_list))
                 uniques, counts = combined.unique(dim=0, return_counts=True)
                 difference = uniques[counts == 1]
                 # difference = nbr_list
                 print("n nbrs   : ", difference.shape[0])
                 nbr_dist = ((xyz_recon[difference[:, 0]] - xyz_recon[difference[:, 1]]).pow(2).sum(-1) + EPS).sqrt()
-                loss_nbr = torch.maximum(2.1 - nbr_dist,torch.Tensor([0.0]).to(xyz.device)).mean()
+                if prefix == 'hyper_':
+                    loss_nbr = torch.maximum(3.6 - nbr_dist,torch.Tensor([0.0]).to(xyz.device)).mean()
+                else:
+                    loss_nbr = torch.maximum(2.1 - nbr_dist,torch.Tensor([0.0]).to(xyz.device)).mean()
                 print("nbr      : ", "{:.5f}".format(loss_nbr.item()))
                 loss_recon += loss_nbr * delta
             else:
                 loss_nbr = torch.Tensor([0.0]).to(device)
             
             # add interaction loss
-            if zeta != 0.0:                
+            if eta != 0.0:                
                 interaction_list = batch['interaction_list']
                 print("n inter  : ", interaction_list.shape[0])
                 inter_dist = ((xyz_recon[interaction_list[:, 0]] - xyz_recon[interaction_list[:, 1]]).pow(2).sum(-1) + EPS).sqrt()
-                loss_inter = torch.maximum(inter_dist - 4.0, torch.Tensor([0.0]).to(xyz.device)).mean()
+                loss_inter = torch.maximum(inter_dist - 3.5, torch.Tensor([0.0]).to(xyz.device)).mean()
                 print("inter    : ", "{:.5f}".format(loss_inter.item())) 
-                loss_recon += loss_inter * zeta
+                loss_recon += loss_inter * eta
             else:
                 loss_inter = torch.Tensor([0.0]).to(device)
                 
@@ -227,7 +246,6 @@ def loop(loader, optimizer, device, model, beta, epoch,
         print(f'memory usage : ', "{:.5f} %".format(info.used*100/info.total))
         end = time.time()
         print('time     : ', end-st)
-        # print(f"---------------------------")
         # memory = 0
 
         # if loss.item() >= gamma * 200.0 or torch.isnan(loss):

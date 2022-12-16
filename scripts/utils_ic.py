@@ -25,7 +25,9 @@ core_atoms = \
 'THR': ['O','N','C','CA','CB','OG1','CG2'],
 'TRP': ['O','N','C','CA','CB','CG','CD1','CD2','NE1','CE2','CZ2','CH2','CE3','CZ3'],
 'TYR': ['O','N','C','CA','CB','CG','CD1','CD2','CE2','CZ','CE1','OH'],
-'VAL': ['O','N','C','CA','CB','CG1','CG2']
+'VAL': ['O','N','C','CA','CB','CG1','CG2'],
+'TPO': ['O','N','C','CA','CB','OG1','CG2', 'P', 'OE1', 'OE2', 'OE3'],
+'SEP': ['O','N','C','CA','CB','OG', 'P', 'OE1', 'OE2', 'OE3'],
 }
 
 atom_order_list = \
@@ -76,7 +78,9 @@ atom_order_list = \
   [5, 7, 8],
   [7, 8, 9],
   [7, 8, 9]],
- 'VAL': [[1, 2, 3], [2, 3, 4], [2, 3, 4]]}
+ 'VAL': [[1, 2, 3], [2, 3, 4], [2, 3, 4]],
+ 'TPO': [[1, 2, 3], [2, 3, 4], [2, 3, 4], [6, 4, 5], [4, 5, 7], [4, 5, 7], [4, 5, 7]],
+ 'SEP': [[1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6], [4, 5, 6], [4, 5, 6]]}
 
 
 IDX2THR = {0: 'ASN',
@@ -98,7 +102,9 @@ IDX2THR = {0: 'ASN',
  16: 'PRO',
  17: 'PHE',
  18: 'CYS',
- 19: 'THR'}
+ 19: 'THR',
+ 20: 'TPO',
+ 21: 'SEP'}
 
 def get_ic(names, traj):
     A4, A3, A2, A1 = names 
@@ -158,45 +164,17 @@ def dihedral(p):
     y = np.diagonal(np.dot(np.cross(b1, v), w.T))
     return np.arctan2(y, x)
 
-def get_sidechain_ic_(traj):
-    table, _ = traj.top.to_dataframe()   
-    res_list = list(set(list(table.resSeq)))
-    res_list.sort()
-    n_res = len(res_list)
-    tot_ic = []
-    
-    for i in range(1,n_res-1):
-        rest = table.loc[table.resSeq==res_list[i]]
-        if len(rest) > 0: 
-            resn = rest.resName.values[0]
-            atom_list = ['N', 'C', 'CA'] + core_sc[resn]
-            atom_idx = [rest.loc[rest.name==atom].index[0] for atom in atom_list]
-            restraj = traj.atom_slice(atom_idx)
-            tb, _ = restraj.top.to_dataframe()
-            resxyz = restraj.xyz
-            
-            ic_i = np.zeros((10, resxyz.shape[0], 3))
-            for j in range(len(core_sc[resn])):
-                A1, A2, A3, A4 = resxyz[:, j+3], resxyz[:, j+2], resxyz[:, j+1], resxyz[:, j]      
-                dist = np.sqrt(((A1 - A2)**2).sum(-1))
-                ang = angle_between(A1 - A2, A3 - A2)
-                tor = dihedral([A1, A2, A3, A4])
-                tor = ((tor + np.pi) % (2 * np.pi)) - np.pi
-                ic_i[j] = np.stack([dist, ang, tor],axis=-1).reshape(resxyz.shape[0], 3)
-            tot_ic.append(ic_i)
-
-    tot_ic = np.stack(tot_ic, axis=0).transpose(2, 0, 1, 3)
-    return tot_ic
 
 def get_sidechain_ic(traj):
     table, _ = traj.top.to_dataframe()   
-    res_list = list(set(list(table.resSeq)))
+    table['newSeq'] = table['resSeq'] + 5000*table['chainID']
+    res_list = np.unique(np.array(table.newSeq))
     res_list.sort()
     n_res = len(res_list)
     tot_ic = []
     for i in range(1,n_res-1):
-        rest = table.loc[table.resSeq==res_list[i]]
-        if len(rest) > 0: 
+        rest = table.loc[table.newSeq==res_list[i]]
+        if len(rest) > 0:             
             resn = rest.resName.values[0]
             atom_list = core_atoms[resn]
             atom_idx = [rest.loc[rest.name==atom].index[0] for atom in atom_list]
@@ -219,6 +197,7 @@ def get_sidechain_ic(traj):
 
     tot_ic = np.stack(tot_ic, axis=0).transpose(2, 0, 1, 3)
     return tot_ic
+
 
 def get_backbone_ic(traj):
     CA = traj.top.select('name CA')
@@ -314,37 +293,3 @@ def ic_to_xyz(CG_nxyz, ic_recon, info):
         
     xyz_recon = xyz_recon.reshape(xyz_recon.shape[0],-1,3)[:,atom_idx,:][:,permute,:]
     return xyz_recon
-
-
-def ic_to_xyz_(CG_nxyz, ic_recon, info):
-    CG_xyz = CG_nxyz[:, :, 1:]
-
-    atomn, resn = info
-    
-    N = add_atom_to_xyz(ic_recon[:,:,0], [CG_xyz[:,1:-1], CG_xyz[:,:-2], CG_xyz[:,2:]])
-    C = add_atom_to_xyz(ic_recon[:,:,1], [CG_xyz[:,1:-1], CG_xyz[:,2:], CG_xyz[:,:-2]])
-    O = add_atom_to_xyz(ic_recon[:,:,2], [C, CG_xyz[:,1:-1], N])
-    sc_xyz = torch.stack((N, C, CG_xyz[:,1:-1]), axis=2)
-    
-    for i in range(10):
-        new_atom = add_atom_to_xyz(ic_recon[:,:,3+i], [sc_xyz[:,:,-1], sc_xyz[:,:,-2], sc_xyz[:,:,-3]]).unsqueeze(-2) #.reshape(1, 3)
-        sc_xyz = torch.cat((sc_xyz, new_atom),axis=2)
-        
-    sc_xyz = torch.cat((O.unsqueeze(2), sc_xyz),axis=2)
-    
-    atom_idx = []
-    permute = []
-    permute_idx, atom_idx_idx = 0, 0
-    for i in range(len(resn)):  
-        p = torch.LongTensor([np.where(copy_core[resn[i]]==atom)[0][0]+permute_idx for atom in atomn[i]])
-        permute.append(p)  
-        atom_idx.append(torch.LongTensor(np.arange(atom_idx_idx, atom_idx_idx+len(atomn[i]))))
-        permute_idx += len(atomn[i])
-        atom_idx_idx += 14
-        
-    atom_idx = torch.cat(atom_idx).reshape(-1)
-    permute = torch.cat(permute).reshape(-1)
-    sc_xyz = sc_xyz.reshape(sc_xyz.shape[0],-1,3)[:,atom_idx,:]
-    sc_xyz = sc_xyz[:,permute,:]
-    return sc_xyz
-
