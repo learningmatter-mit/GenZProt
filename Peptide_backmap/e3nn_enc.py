@@ -1,3 +1,7 @@
+"""
+e3nn encoder 
+borrowed from DiffDock (https://github.com/gcorso/DiffDock)
+"""
 import math
 import numpy as np
 
@@ -9,8 +13,7 @@ from torch_scatter import scatter, scatter_mean
 from e3nn import o3
 from e3nn.nn import BatchNorm
 
-from .conv import make_directed
-
+from conv import make_directed
 
 class TensorProductConvLayer(torch.nn.Module):
     def __init__(self, in_irreps, sh_irreps, out_irreps, n_edge_features, residual=True, batch_norm=False, dropout=0.0,
@@ -51,7 +54,7 @@ class TensorProductConvLayer(torch.nn.Module):
 
 
 class e3nnEncoder(torch.nn.Module):
-    def __init__(self, device, n_atom_basis, in_edge_features=4, cross_max_distance=30,
+    def __init__(self, device, n_atom_basis, n_cgs=None, in_edge_features=4, cross_max_distance=30,
                  sh_lmax=2, ns=12, nv=4, num_conv_layers=3, atom_max_radius=12, cg_max_radius=30,
                  distance_embed_dim=8, cross_distance_embed_dim=8, use_second_order_repr=False, batch_norm=False,
                  dropout=0.0, lm_embedding_type=None):
@@ -72,7 +75,10 @@ class e3nnEncoder(torch.nn.Module):
         self.atom_node_embedding = nn.Embedding(30, ns, padding_idx=0)
         self.atom_edge_embedding = nn.Sequential(nn.Linear(2 + in_edge_features + distance_embed_dim, ns),nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
 
-        self.cg_node_embedding = nn.Embedding(30, ns, padding_idx=0)
+        if n_cgs == None:
+            self.cg_node_embedding = nn.Embedding(30, ns, padding_idx=0)
+        else:
+            self.cg_node_embedding = nn.Embedding(n_cgs, ns, padding_idx=0)
         self.cg_edge_embedding = nn.Sequential(nn.Linear(2 + in_edge_features + distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
 
         self.cross_edge_embedding = nn.Sequential(nn.Linear(cross_distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
@@ -126,10 +132,11 @@ class e3nnEncoder(torch.nn.Module):
         self.atom_to_cg_conv_layers = nn.ModuleList(atom_to_cg_conv_layers)
 
         self.dense = nn.Sequential(nn.Linear(84, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
+        # self.dense = nn.Sequential(nn.Linear(96, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
         
     def forward(self, z, xyz, cg_z, cg_xyz, mapping, nbr_list, cg_nbr_list):
         # build atom graph
-        atom_node_attr, atom_edge_index, atom_edge_attr, atom_edge_sh = self.build_atom_conv_graph(z, xyz, nbr_list)
+        atom_node_attr, atom_edge_index, atom_edge_attr, atom_edge_sh = self.build_atom_conv_graph(z, xyz, nbr_list)        
         atom_src, atom_dst = atom_edge_index
         atom_node_attr = self.atom_node_embedding(atom_node_attr)
         atom_edge_attr = self.atom_edge_embedding(atom_edge_attr)
@@ -149,12 +156,11 @@ class e3nnEncoder(torch.nn.Module):
             atom_edge_attr_ = torch.cat([atom_edge_attr, atom_node_attr[atom_src, :self.ns], atom_node_attr[atom_dst, :self.ns]], -1) #(506470,48)
             atom_intra_update = self.atom_conv_layers[l](atom_node_attr, atom_edge_index, atom_edge_attr_, atom_edge_sh) #(6688,28)
             
-
             # inter graph message passing
             cg_to_atom_edge_attr_ = torch.cat([cross_edge_attr, atom_node_attr[cross_atom, :self.ns], cg_node_attr[cross_cg, :self.ns]], -1) #(6688,48)
             atom_inter_update = self.cg_to_atom_conv_layers[l](cg_node_attr, cross_edge_index, cg_to_atom_edge_attr_, cross_edge_sh,
                                                               out_nodes=atom_node_attr.shape[0]) #(6688,28)
-        
+            
             if l != len(self.atom_conv_layers) - 1:
                 cg_edge_attr_ = torch.cat([cg_edge_attr, cg_node_attr[cg_src, :self.ns], cg_node_attr[cg_dst, :self.ns]], -1)
                 cg_intra_update = self.cg_conv_layers[l](cg_node_attr, cg_edge_index, cg_edge_attr_, cg_edge_sh)
@@ -197,7 +203,6 @@ class e3nnEncoder(torch.nn.Module):
 
     def build_cg_conv_graph(self, cg_z, cg_xyz, cg_nbr_list):
         cg_nbr_list, _ = make_directed(cg_nbr_list)
-
         node_attr = cg_z.long()
         edge_attr = torch.cat([
             cg_z[cg_nbr_list[:,0]].unsqueeze(-1), cg_z[cg_nbr_list[:,1]].unsqueeze(-1),
@@ -223,7 +228,7 @@ class e3nnEncoder(torch.nn.Module):
 
 
 class e3nnPrior(torch.nn.Module):
-    def __init__(self, device, n_atom_basis, in_edge_features=4,
+    def __init__(self, device, n_atom_basis, n_cgs=None, in_edge_features=4,
                  sh_lmax=2, ns=12, nv=4, num_conv_layers=3, cg_max_radius=30,
                  distance_embed_dim=8, use_second_order_repr=False, batch_norm=False,
                  dropout=0.0, lm_embedding_type=None):
@@ -239,7 +244,10 @@ class e3nnPrior(torch.nn.Module):
 
         self.num_conv_layers = num_conv_layers
 
-        self.cg_node_embedding = nn.Embedding(30, ns, padding_idx=0)
+        if n_cgs == None:
+            self.cg_node_embedding = nn.Embedding(30, ns, padding_idx=0)
+        else:
+            self.cg_node_embedding = nn.Embedding(n_cgs, ns, padding_idx=0)
         self.cg_edge_embedding = nn.Sequential(nn.Linear(2 + in_edge_features + distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
         self.cg_distance_expansion = GaussianSmearing(0.0, cg_max_radius, distance_embed_dim)
 
@@ -280,6 +288,8 @@ class e3nnPrior(torch.nn.Module):
         
         self.mu = nn.Sequential(nn.Linear(48, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
         self.sigma = nn.Sequential(nn.Linear(48, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
+        # self.mu = nn.Sequential(nn.Linear(45, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
+        # self.sigma = nn.Sequential(nn.Linear(45, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
 
     def forward(self, cg_z, cg_xyz, cg_nbr_list):
         # build cg graph

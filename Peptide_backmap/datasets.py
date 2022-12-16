@@ -26,6 +26,7 @@ from utils import shuffle_traj
 THREE_LETTER_TO_ONE = {
     "ARG": "R", 
     "HIS": "H", 
+    "HID": "H",
     "LYS": "K", 
     "ASP": "D", 
     "GLU": "E", 
@@ -44,8 +45,8 @@ THREE_LETTER_TO_ONE = {
     "PHE": "F", 
     "TYR": "Y", 
     "TRP": "W",
-    "ACE": "ACE", #terminal
-    "NME": "NME", #terminal
+    "TPO": "O",
+    "SEP": "B"
 }
 
 RES2IDX = {'N': 0,
@@ -68,8 +69,8 @@ RES2IDX = {'N': 0,
              'F': 17,
              'C': 18,
              'T': 19,
-             'ACE': 20,
-             'NME': 21}
+             'O': 20,
+             'B': 21}
 
 atomic_num_dict = {'C':6, 'H':1, 'O':8, 'N':7, 'S':16, 'Se': 34}
 
@@ -79,52 +80,12 @@ PROTEINFILES = {'covid': {'traj_paths': "../data/DESRES-Trajectory_sarscov2-1144
 
                 'chignolin': {'traj_paths': "../data/filtered/e1*/*.xtc", 
                               'pdb_path': '../data/filtered/filtered.pdb', 
-                              'file_type': 'xtc'}, 
-                'chignolin_1': {'traj_paths': "../data/chig_partial_1.xtc", 
-                              'pdb_path': '../data/filtered/filtered.pdb', 
-                              'file_type': 'xtc'}, 
-                'chignolin_2': {'traj_paths': "../data/chig_partial_2.xtc", 
-                              'pdb_path': '../data/filtered/filtered.pdb', 
-                              'file_type': 'xtc'},
-                'chignolin_3': {'traj_paths': "../data/chig_partial_3.xtc", 
-                              'pdb_path': '../data/filtered/filtered.pdb', 
-                              'file_type': 'xtc'},
-                'cc_chignolin': {'traj_paths': "../data/cc_chignolin.pdb", 
-                              'pdb_path': '../data/cc_chignolin.pdb', 
-                              'file_type': 'pdb'},
-                'red_chignolin': {'traj_paths': "../data/red_chignolin.pdb", 
-                              'pdb_path': '../data/red_chignolin.pdb', 
-                              'file_type': 'pdb'},
-                              
-                'dipeptide': 
-                            {'pdb_path': '../data/alanine-dipeptide-nowater.pdb', 
-                            'traj_paths': '../data/alanine-dipeptide-*-250ns-nowater.xtc',
-                            'file_type': 'xtc'
-                             },
-                'pentapeptide': 
-                            {'pdb_path': '../data/pentapeptide-impl-solv.pdb',
-                             'traj_paths': '../data/pentapeptide-*-500ns-impl-solv.xtc',
-                             'file_type': 'xtc'
-                            },
-                'fs':
-                            {'pdb_path': '../data/fs_peptide/onlyprot.pdb',
-                             'traj_paths': '../data/fs_peptide/all_reduced.xtc',
-                             'file_type': 'xtc'
-                            },
-                'coiled_coil':
-                            {'pdb_path': '../data/pep_trajs/P5-coiled-coil/coiled_coil.pdb',
-                             'traj_paths': '../data/pep_trajs/P5-coiled-coil/free*xtc',
-                             'file_type': 'xtc'
-                            },
-                'nucleocapsid':
-                            {'pdb_path': '../data/nucleocapsid/onlyprot.pdb',
-                             'traj_paths': '../data/nucleocapsid/all_nucleocapsid.xtc',
-                             'file_type': 'xtc'
-                            },
+                              'file_type': 'xtc'}
                 }
 
 prefixs = ['PED']
-PED_PDBs = [glob.glob(f'../data/processed/{prefix}*.pdb') for prefix in prefixs]
+# PED_PDBs = [glob.glob(f'../data/processed/{prefix}*.pdb') for prefix in prefixs]
+PED_PDBs = [glob.glob(f'/home/soojungy/eofe8_mnt/use_files/{prefix}*.pdb') for prefix in prefixs]
 for idx, prefix_files in enumerate(PED_PDBs):
     for PDBfile in prefix_files:
         ID = PDBfile.split('/')[-1].split('.')[0][len(prefixs[idx]):]
@@ -134,7 +95,6 @@ for idx, prefix_files in enumerate(PED_PDBs):
                         }
                         }
         PROTEINFILES.update(dct)
-# print(PROTEINFILES)
 
 def get_backbone(top):
     backbone_index = []
@@ -250,9 +210,6 @@ def get_diffpool_data(N_cg, trajs, n_data, edgeorder=1, shift=False, pdb=None, r
             num_cgs.append(torch.LongTensor([N_cg]))
             num_atoms.append(torch.LongTensor([n_atoms]))
 
-    #z_data, xyz_data, num_atoms, num_cgs, bond_data, hyperedge_data, angle_data, dihedral_data = shuffle( z_data, xyz_data, num_atoms, num_cgs, bond_data, hyperedge_data, angle_data, dihedral_data)
-
-
     props = {'z': z_data[:n_data],
          'xyz': xyz_data[:n_data],
          'num_atoms': num_atoms[:n_data], 
@@ -346,12 +303,68 @@ def learn_map(traj, reg_weight, n_cgs, n_atoms ,
     return ae.assign_map.argmax(-1).detach().cpu()
 
 
-def get_cg_and_xyz(traj, params, cg_method='backbone', n_cgs=None, mapshuffle=0.0, mapping=None):
+def get_calpha(table):
+    bead_mappings = []
+
+    reslist = list(set(list(table.resSeq)))
+    reslist.sort()
+
+    j = 0
+    for i in range(len(table)):
+        if table.iloc[i].resSeq == reslist[j]:
+            bead_mappings.append(j)
+        else:
+            j += 1
+            bead_mappings.append(j)
+
+    # n_cgs = len(reslist)
+    bead_mapping = np.array(bead_mappings)
+    return bead_mapping
+
+
+def get_hier_cg_and_xyz(traj, params, cg_method='backbone', n_cgs=None, mapshuffle=0.0, bead_mapping=None, hyperbead_mapping=None):
 
     atomic_nums, protein_index = get_atomNum(traj)
     n_atoms = len(atomic_nums)
+
+    frames = traj.xyz[:, protein_index, :] * 10.0
+
+    table, _ = traj.top.to_dataframe()
+    indices = table.loc[table.name=='CA'].index
+    traj = traj.atom_slice(indices)
+
+    if hyperbead_mapping != None and bead_mapping != None:
+        return hyperbead_mapping, bead_mapping, frames, None
+
+    # hyperbead: backbone partition only
+    # bead: alpha only
+    cg_method = 'backbone'
+    hyperbead_mapping = backbone_partition(traj, n_cgs, skip=1)
+    cg_coord = None
+    bead_mapping = get_calpha(table)
+
+    # print coarse graining summary 
+    print("CG method: {}".format(cg_method))
+    print("Number of CG sites: {}".format(hyperbead_mapping.max() + 1))
+    print("Number of residues: {}".format(bead_mapping.max() + 1))
+
+    #assert len(list(set(mapping.tolist()))) == n_cgs
+
+    hyperbead_mapping = torch.LongTensor( hyperbead_mapping)
+    bead_mapping = torch.LongTensor( bead_mapping)
+    frames = shuffle(frames)
+    
+    return hyperbead_mapping, bead_mapping, frames, cg_coord
+
+
+def get_cg_and_xyz(traj, params, cg_method='backbone', n_cgs=None, mapshuffle=0.0, mapping=None):
+    """
+    from Wang et al. (ICML 2022)
+    changed cg_method in ['minimal', alpha']
+    """
+    atomic_nums, protein_index = get_atomNum(traj)
+    n_atoms = len(atomic_nums)
     skip = 200
-    # get alpha carbon only 
 
     frames = traj.xyz[:, protein_index, :] * 10.0 
 
@@ -366,12 +379,15 @@ def get_cg_and_xyz(traj, params, cg_method='backbone', n_cgs=None, mapshuffle=0.
         #     mappings.append(map_index)
 
         table, _ = traj.top.to_dataframe()
-        reslist = list(set(list(table.resSeq)))
+        table['newSeq'] = table['resSeq'] + 5000*table['chainID']
+        # reslist = list(set(list(table.resSeq)))
+        reslist = list(set(list(table.newSeq)))
         reslist.sort()
 
         j = 0
         for i in range(len(table)):
-            if table.iloc[i].resSeq == reslist[j]:
+            # if table.iloc[i].resSeq == reslist[j]:
+            if table.iloc[i].newSeq == reslist[j]:
                 mappings.append(j)
             else:
                 j += 1
@@ -437,14 +453,8 @@ def get_cg_and_xyz(traj, params, cg_method='backbone', n_cgs=None, mapshuffle=0.
         cg_coord = None
         frames = shuffle(frames)
 
-    elif cg_method =='martini':
-        mapping = None
-        cg_coord = None
-        frames = shuffle(frames)
-
     else:
         raise ValueError("{} coarse-graining option not available".format(cg_method))
-
 
     # print coarse graining summary 
     print("CG method: {}".format(cg_method))
@@ -617,61 +627,51 @@ def build_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums, top, order
     return dataset
 
 
-def build_multiprotein_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums, top, order=1, cg_traj=None):
+def build_hier_dataset(bead_mapping, hyperbead_mapping, traj, atom_cutoff, cg_cutoff, hyper_cg_cutoff, atomic_nums, top, order=1, cg_traj=None, prot_idx=None):
     
-    CG_nxyz_data = []
-    nxyz_data = []
+    dataset = build_ic_peptide_dataset(bead_mapping, traj, atom_cutoff, cg_cutoff, atomic_nums, top, order=order, cg_traj=cg_traj, prot_idx=prot_idx)
+    
+    traj = md.Trajectory(traj, top)
+    table, _ = traj.top.to_dataframe()
+    indices = table.loc[table.name=='CA'].index
+    traj = traj.atom_slice(indices)
+    ca_top = traj.top
+    for i in range(len(indices)-1):
+        ca_top.add_bond(ca_top.residue(i), ca_top.residue(i+1), order=1)
 
-    num_atoms_list = []
-    num_CGs_list = []
-    CG_mapping_list = []
-    bond_edge_list = []
-    bondgraph = top.to_bondgraph()
+    hb_bond_edge_list = []
+    hb_bondgraph = ca_top.to_bondgraph()
+    hb_edges = torch.LongTensor( [[e[0].index, e[1].index] for e in hb_bondgraph.edges] )# list of edge list 
 
-    edges = torch.LongTensor( [[e[0].index, e[1].index] for e in bondgraph.edges] )# list of edge list 
-    edges = get_high_order_edge(edges, order, atomic_nums.shape[0])
-
-    for xyz in traj:
-        xyz = random_rotation(xyz)
-        nxyz = torch.cat((torch.Tensor(atomic_nums[..., None]), torch.Tensor(xyz) ), dim=-1)
-        nxyz_data.append(nxyz)
-        num_atoms_list.append(torch.LongTensor( [len(nxyz)]))
-        bond_edge_list.append(edges)
-
-    CG_res = list(top.residues)#[:len(mapping.unique())]
-    CG_res = CG_res[:len(mapping.unique())]
-    # table, bonds = top.to_dataframe()
-    CG_res = torch.LongTensor([RES2IDX[THREE_LETTER_TO_ONE[res.name[:3]]] for res in CG_res]).reshape(-1,1)
+    num_res_list, res_edge_list = [], []
+    for res_nxyz in dataset.props['OG_CG_nxyz']:
+        num_res_list.append(torch.LongTensor( [len(res_nxyz)]) )
+        res_edge_list.append(hb_edges)
 
     # Aggregate CG coorinates 
-    for i, nxyz in enumerate(nxyz_data):
-        xyz = torch.Tensor(nxyz[:, 1:]) 
-        if cg_traj is not None:
-            CG_xyz = torch.Tensor( cg_traj[i] )
-        else:
-            CG_xyz = scatter_mean(xyz, mapping, dim=0)
-        
-        CG_nxyz = torch.cat((CG_res, CG_xyz), dim=-1)
-        CG_nxyz_data.append(CG_nxyz)
-        num_CGs_list.append(torch.LongTensor( [len(CG_nxyz)]) )
-        CG_mapping_list.append(mapping)
+    hb_nxyz_data, num_hbs_list, hb_mapping_list = [], [], []
+    first_occurences_list = []
+    for i, res_nxyz in enumerate(dataset.props['OG_CG_nxyz']):
+        res_xyz = torch.Tensor(res_nxyz[:, 1:]) 
 
-    props = {'nxyz': nxyz_data,
-             'CG_nxyz': CG_nxyz_data,
-             'num_atoms': num_atoms_list, 
-             'num_CGs':num_CGs_list,
-             'CG_mapping': CG_mapping_list, 
-             'bond_edge_list':  bond_edge_list
-            }
+        hb_xyz = scatter_mean(res_xyz, hyperbead_mapping, dim=0)
+        hb_nxyz = torch.cat((torch.LongTensor(list(range(len(hb_xyz))))[..., None], hb_xyz), dim=-1)
+        hb_nxyz_data.append(hb_nxyz)
+        num_hbs_list.append(torch.LongTensor( [len(hb_nxyz)]) )
+        hb_mapping_list.append(hyperbead_mapping)
 
-    dataset = props.copy()
-    # dataset = CGDataset(props.copy())
-    # dataset.generate_neighbor_list(atom_cutoff=atom_cutoff, cg_cutoff=cg_cutoff)
-    
+    dataset.props['num_hyper_atoms'] = num_res_list
+    dataset.props['hyper_CG_nxyz'] = hb_nxyz_data
+    dataset.props['num_hyper_CGs'] = num_hbs_list
+    dataset.props['hyper_CG_mapping'] = hb_mapping_list
+    dataset.props['hyper_bond_edge_list'] = res_edge_list
+
+    dataset.generate_neighbor_list(atom_cutoff=cg_cutoff, cg_cutoff=hyper_cg_cutoff, prefix='hyper_')
+
     return dataset
 
 
-def build_ic_multiprotein_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums, top, order=1, cg_traj=None, prot_idx=None):
+def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums, top, order=1, cg_traj=None, prot_idx=None):
     
     CG_nxyz_data = []
     nxyz_data = []
@@ -682,8 +682,19 @@ def build_ic_multiprotein_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_
     bond_edge_list = []
     
     table, _ = top.to_dataframe()
-    nfirst = len(table.loc[table.resSeq==table.resSeq.min()])
-    nlast = len(table.loc[table.resSeq==table.resSeq.max()])
+    table['newSeq'] = table['resSeq'] + 5000*table['chainID']
+
+    endpoints = []
+    for idx, chainID in enumerate(np.unique(np.array(table.chainID))):
+        tb_chain = table.loc[table.chainID==chainID]
+        first = tb_chain.newSeq.min()
+        last = tb_chain.newSeq.max()
+        endpoints.append(first)
+        endpoints.append(last)
+ 
+    print(f'traj has {table.chainID.max()+1} chains')
+    nfirst = len(table.loc[table.newSeq==table.newSeq.min()])
+    nlast = len(table.loc[table.newSeq==table.newSeq.max()])
 
     _top = top.subset(np.arange(top.n_atoms)[nfirst:-nlast])
     bondgraph = _top.to_bondgraph()
@@ -711,7 +722,6 @@ def build_ic_multiprotein_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_
             CG_xyz = torch.Tensor( cg_traj[i] )
         else:
             CG_xyz = xyz[indices]
-
         CG_nxyz = torch.cat((CG_res, CG_xyz), dim=-1)
         CG_nxyz_data.append(CG_nxyz)
         num_CGs_list.append(torch.LongTensor( [len(CG_nxyz)-2]) )
@@ -721,16 +731,29 @@ def build_ic_multiprotein_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_
     nxyz_data = [nxyz[nfirst:-nlast,:] for nxyz in nxyz_data] 
     trim_CG_nxyz_data = [nxyz[1:-1,:] for nxyz in CG_nxyz_data] 
 
-    res_list = list(set(list(table.resSeq)))
-    res_list.sort()
+    # res_list = list(set(list(table.resSeq)))
+    res_list = np.unique(np.array(table.newSeq))
     n_res = len(res_list)
     mask = torch.zeros(n_res-2,13)
-
     for i in tqdm(range(1,n_res-1), desc='generate mask', file=sys.stdout):
-        num_atoms = len(table.loc[table.resSeq==res_list[i]])-1
-        mask[i-1][:num_atoms] = torch.ones(num_atoms)
+        # num_atoms = len(table.loc[table.resSeq==res_list[i]])-1
+        if res_list[i] not in endpoints:
+            num_atoms = len(table.loc[table.newSeq==res_list[i]])-1
+            mask[i-1][:num_atoms] = torch.ones(num_atoms)    
     mask = mask.reshape(-1)
+
+    interm_endpoints = set(endpoints)-set([table.newSeq.min(), table.newSeq.max()])
+    mask_xyz_list = []
+    for res in interm_endpoints:
+        mask_xyz_list += list(table.loc[table.newSeq==res].index)
+    mask_xyz = torch.LongTensor(np.array(mask_xyz_list) - nfirst)
+
+    # mask_xyz = torch.ones(len(nxyz_data[0]))
+    # mask_xyz[mask_xyz_list] = torch.zeros(len(mask_xyz_list))
+    
     mask_list = [mask for _ in range(len(nxyz_data))]
+    mask_xyz_list = [mask_xyz for _ in range(len(nxyz_data))]
+    
     prot_idx_list = [torch.Tensor([prot_idx]) for _ in range(len(nxyz_data))]
     
     st = time.time()
@@ -750,6 +773,7 @@ def build_ic_multiprotein_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_
              'bond_edge_list':  bond_edge_list,
              'ic': ic_list,
              'mask': mask_list,
+             'mask_xyz_list': mask_xyz_list,
              'prot_idx': prot_idx_list
             }
     
@@ -794,55 +818,58 @@ def create_info_dict(dataset_label_list):
     n_cg_list, traj_list, info_dict = [], [], {} 
     cnt = 0
     for idx, label in enumerate(tqdm(dataset_label_list)): 
-        try:
-            traj = shuffle_traj(load_protein_traj(label))
-            table, _ = traj.top.to_dataframe()
-            reslist = list(set(list(table.resSeq)))
-            reslist.sort()
-            
-            n_cg = len(reslist)
-            atomic_nums, protein_index = get_atomNum(traj)
+        # try:
+        traj = shuffle_traj(load_protein_traj(label))
+        table, _ = traj.top.to_dataframe()
+        # reslist = list(set(list(table.resSeq)))
+        table['newSeq'] = table['resSeq'] + 5000*table['chainID']
+        reslist = list(set(list(table.newSeq)))
+        reslist.sort()
+        # print(table.head(50))
+        # print(table.tail(50))
+        n_cg = len(reslist)
+        atomic_nums, protein_index = get_atomNum(traj)
 
-            atomn = [list(table.loc[table.resSeq==res].name) for res in reslist][1:-1]
-            resn = list(table.loc[table.name=='CA'].resName)[1:-1]
+        # atomn = [list(table.loc[table.resSeq==res].name) for res in reslist][1:-1]
+        atomn = [list(table.loc[table.newSeq==res].name) for res in reslist][1:-1]
+        resn = list(table.loc[table.name=='CA'].resName)[1:-1]
         
-            atom_idx = []
-            permute = []
-            permute_idx, atom_idx_idx = 0, 0
-            for i in range(len(resn)):  
-                atom = atomn[i][0]
-                p = [np.where(np.array(core_atoms[resn[i]])==atom)[0][0]+permute_idx for atom in atomn[i]]
-                permute.append(p)  
-                atom_idx.append(np.arange(atom_idx_idx, atom_idx_idx+len(atomn[i])))
-                permute_idx += len(atomn[i])
-                atom_idx_idx += 14
+        atom_idx = []
+        permute = []
+        permute_idx, atom_idx_idx = 0, 0
+        for i in range(len(resn)):  
+            p = [np.where(np.array(core_atoms[resn[i]])==atom)[0][0]+permute_idx for atom in atomn[i]]
+            permute.append(p)  
+            atom_idx.append(np.arange(atom_idx_idx, atom_idx_idx+len(atomn[i])))
+            permute_idx += len(atomn[i])
+            atom_idx_idx += 14
 
-            atom_orders1 = [[] for _ in range(10)]
-            atom_orders2 = [[] for _ in range(10)]
-            atom_orders3 = [[] for _ in range(10)]
-            for res_idx, res in enumerate(resn):
-                atom_idx_list = atom_order_list[res]
-                for i in range(10):
-                    if i <= len(atom_idx_list)-1:
-                        atom_orders1[i].append(atom_idx_list[i][0])
-                        atom_orders2[i].append(atom_idx_list[i][1])
-                        atom_orders3[i].append(atom_idx_list[i][2])
-                    else:
-                        atom_orders1[i].append(0)
-                        atom_orders2[i].append(1)
-                        atom_orders3[i].append(2)
-            atom_orders1 = torch.LongTensor(np.array(atom_orders1))
-            atom_orders2 = torch.LongTensor(np.array(atom_orders2))
-            atom_orders3 = torch.LongTensor(np.array(atom_orders3))
-            atom_orders = torch.stack([atom_orders1, atom_orders2, atom_orders3], axis=-1) # 10, n_res, 3
-            
-            permute = torch.LongTensor(np.concatenate(permute)).reshape(-1)
-            atom_idx = torch.LongTensor(np.concatenate(atom_idx)).reshape(-1)
-            
-            info_dict[cnt] = (permute, atom_idx, atom_orders)
-            n_cg_list.append(n_cg)
-            traj_list.append(traj)
-            cnt += 1
-        except:
-            print(f'failed to load {label}')
+        atom_orders1 = [[] for _ in range(10)]
+        atom_orders2 = [[] for _ in range(10)]
+        atom_orders3 = [[] for _ in range(10)]
+        for res_idx, res in enumerate(resn):
+            atom_idx_list = atom_order_list[res]
+            for i in range(10):
+                if i <= len(atom_idx_list)-1:
+                    atom_orders1[i].append(atom_idx_list[i][0])
+                    atom_orders2[i].append(atom_idx_list[i][1])
+                    atom_orders3[i].append(atom_idx_list[i][2])
+                else:
+                    atom_orders1[i].append(0)
+                    atom_orders2[i].append(1)
+                    atom_orders3[i].append(2)
+        atom_orders1 = torch.LongTensor(np.array(atom_orders1))
+        atom_orders2 = torch.LongTensor(np.array(atom_orders2))
+        atom_orders3 = torch.LongTensor(np.array(atom_orders3))
+        atom_orders = torch.stack([atom_orders1, atom_orders2, atom_orders3], axis=-1) # 10, n_res, 3
+        
+        permute = torch.LongTensor(np.concatenate(permute)).reshape(-1)
+        atom_idx = torch.LongTensor(np.concatenate(atom_idx)).reshape(-1)
+        
+        info_dict[cnt] = (permute, atom_idx, atom_orders)
+        n_cg_list.append(n_cg)
+        traj_list.append(traj)
+        cnt += 1
+        # except:
+        #     print(f'failed to load {label}')
     return n_cg_list, traj_list, info_dict
