@@ -443,7 +443,6 @@ def sample_ic(loader, device, model, atomic_nums, n_cgs, info_dict=None, tqdm_fl
     true_xyzs = []
     recon_xyzs = [[] for _ in range(n_ensemble)]
     recon_ics = [[] for _ in range(n_ensemble)]
-    ensemble_atoms = []
 
     n_z = n_cgs
 
@@ -454,7 +453,7 @@ def sample_ic(loader, device, model, atomic_nums, n_cgs, info_dict=None, tqdm_fl
     for batch in loader:
         batch = batch_to(batch, device)
 
-        atomic_nums, cg_z, xyz, cg_xyz, nbr_list, CG_nbr_list, mapping, num_CGs, ic, cg_nxyz = model.get_inputs(batch)
+        z, cg_z, xyz, cg_xyz, nbr_list, CG_nbr_list, mapping, num_CGs, ic = model.get_inputs(batch)
 
         nres = batch['num_CGs'][0]+2
         OG_CG_nxyz = batch['OG_CG_nxyz'].reshape(-1, nres, 4)
