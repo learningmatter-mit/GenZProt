@@ -1,4 +1,5 @@
 import os 
+import glob
 import sys
 import argparse 
 import copy
@@ -102,10 +103,13 @@ def run_cv(params):
     mapshuffle = params['mapshuffle']
     savemodel = params['savemodel']
     invariantdec = params['invariantdec']
-    n_cgs  = params['n_cgs']
+    n_cgs = params['n_cgs']
+
+    device=3
+    batch_size=4
 
     # set random seed 
-    seed = 123
+    seed = 42
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -119,9 +123,17 @@ def run_cv(params):
     else:
         print("Sampling Task")
 
-    device = 3
-    batch_size = 8
-    dataset_label_list = [params['test_data']]
+    test_PED_PDBs = []
+    dataset_label_list = []
+    test_prefixs = [params['test_data']]
+    for prefix in test_prefixs:
+        test_PED_PDBs += glob.glob(f'/home/gridsan/sjyang/backmap_exp/data/use_files/PED{prefix}*.pdb')
+        test_PED_PDBs += glob.glob(f'/home/soojungy/backmap_exp/data/use_files/PED{prefix}*.pdb')        
+           
+    for PDBfile in test_PED_PDBs:
+        ID = PDBfile.split('/')[-1].split('.')[0][3:]
+        dataset_label_list.append(ID)
+    print(dataset_label_list)
     n_cg_list, traj_list, info_dict = create_info_dict(dataset_label_list)
 
     # create subdirectory 
@@ -143,8 +155,10 @@ def run_cv(params):
         atomic_nums, protein_index = get_atomNum(traj)
         table, _ = traj.top.to_dataframe()
         # multiple chain
-        nfirst = len(table.loc[table.resSeq==table.resSeq.min()])
-        nlast = len(table.loc[table.resSeq==table.resSeq.max()])
+        table['newSeq'] = table['resSeq'] + 5000*table['chainID']
+
+        nfirst = len(table.loc[table.newSeq==table.newSeq.min()])
+        nlast = len(table.loc[table.newSeq==table.newSeq.max()])
 
         n_atoms = atomic_nums.shape[0]
         n_atoms = n_atoms - (nfirst+nlast)
@@ -152,6 +166,8 @@ def run_cv(params):
 
         all_idx = np.arange(len(traj))
         random.shuffle(all_idx)
+
+        ndata = len(all_idx)-len(all_idx)%batch_size
         all_idx = all_idx[:ndata]
 
         n_cgs = n_cg_list[i]
@@ -168,17 +184,16 @@ def run_cv(params):
         breaksym = False
 
     # initialize model 
+    decoder = InternalDecoder56(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
+
+    encoder = e3nnEncoder(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
+    cross_max_distance=cg_cutoff+5, atom_max_radius=atom_cutoff+5, cg_max_radius=cg_cutoff+5)
+    cgPrior = e3nnPrior(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
+    cg_max_radius=cg_cutoff+5)
+
     atom_mu = nn.Sequential(nn.Linear(n_basis, n_basis), nn.ReLU(), nn.Linear(n_basis, n_basis))
     atom_sigma = nn.Sequential(nn.Linear(n_basis, n_basis), nn.ReLU(), nn.Linear(n_basis, n_basis))
-
-    decoder = InternalDecoder2(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
-    encoder = e3nnEncoder(device=device, n_atom_basis=n_basis)
-    cgPrior = e3nnPrior(device=device, n_atom_basis=n_basis)
-    # encoder = EquiEncoder(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=atom_cutoff)
-    # cgPrior = CGprior(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=atom_cutoff)
-    
-    model = peptideCGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior,
-                        det=det, equivariant= not invariantdec).to(device)
+    model = peptideCGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec)
     
     optimizer = optim(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, patience=2, 
@@ -190,7 +205,10 @@ def run_cv(params):
 
     # load model
     load_model_path = params['load_model_path']
-    model.load_state_dict(torch.load(os.path.join(load_model_path, f'model.pt')))
+    epoch = params['test_epoch']
+    model.load_state_dict(torch.load(os.path.join(load_model_path, f'model_{epoch}.pt'), map_location=torch.device('cpu')))
+    model.to(device)
+
     print("model loaded successfully")
 
     print("Starting testing")
@@ -203,9 +221,9 @@ def run_cv(params):
                                                                                 tqdm_flag=tqdm_flag, reflection=params['reflectiontest'],
                                                                                 ic_flag=True, top_table=None, info_dict=info_dict)
 
-    epoch = 0
+    epoch = 1
     # this is just to get KL loss 
-    test_loss, mean_kl_test, mean_recon_test, mean_graph_test, mean_nbr_test, mean_inter_test, xyz_test, xyz_test_recon = loop(testloader, optimizer, device,
+    test_loss, mean_kl_test, mean_recon_test, mean_graph_test, mean_nbr_test, mean_inter_test, mean_xyz_test = loop(testloader, optimizer, device,
                                                 model, beta, gamma, delta, eta, epoch, 
                                                 train=False,
                                                 looptext='epoch {} test'.format(epoch),
@@ -266,6 +284,7 @@ if __name__ == '__main__':
     # paths and environment
     parser.add_argument("-load_json", type=str, default=None)
     parser.add_argument("-load_model_path", type=str, default=None)
+    parser.add_argument("-test_epoch", type=int, default=None)
     parser.add_argument("-logdir", type=str)
     parser.add_argument("-device", type=int)
 
@@ -343,7 +362,8 @@ if __name__ == '__main__':
         task = 'recon'
     else:
         task = 'sample'
-
+    epoch = params['test_epoch']
+    params['logdir'] += f'_epoch_{epoch}'
     params['logdir'] += '_test_'
     params['logdir'] += params['test_data']
 
