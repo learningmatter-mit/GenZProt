@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch_scatter import scatter, scatter_mean
+from torch_scatter import scatter, scatter_mean, scatter_add
 
 from e3nn import o3
 from e3nn.nn import BatchNorm
@@ -37,7 +37,6 @@ class TensorProductConvLayer(torch.nn.Module):
         self.batch_norm = BatchNorm(out_irreps) if batch_norm else None
 
     def forward(self, node_attr, edge_index, edge_attr, edge_sh, out_nodes=None, reduce='mean'):
-
         edge_src, edge_dst = edge_index
         tp = self.tp(node_attr[edge_dst], edge_sh, self.fc(edge_attr))
 
@@ -51,6 +50,7 @@ class TensorProductConvLayer(torch.nn.Module):
         if self.batch_norm:
             out = self.batch_norm(out)
         return out
+
 
 
 class e3nnEncoder(torch.nn.Module):
@@ -73,15 +73,24 @@ class e3nnEncoder(torch.nn.Module):
         self.num_conv_layers = num_conv_layers
 
         self.atom_node_embedding = nn.Embedding(30, ns, padding_idx=0)
-        self.atom_edge_embedding = nn.Sequential(nn.Linear(2 + in_edge_features + distance_embed_dim, ns),nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
+        self.atom_edge_embedding = nn.Sequential(
+                                   nn.Linear(2 + in_edge_features + distance_embed_dim, ns),
+                                   nn.ReLU(), 
+                                   nn.Dropout(dropout),
+                                   nn.Linear(ns, ns))
 
-        if n_cgs == None:
-            self.cg_node_embedding = nn.Embedding(30, ns, padding_idx=0)
-        else:
-            self.cg_node_embedding = nn.Embedding(n_cgs, ns, padding_idx=0)
-        self.cg_edge_embedding = nn.Sequential(nn.Linear(2 + in_edge_features + distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
+        self.cg_node_embedding = nn.Embedding(30, ns, padding_idx=0)
+        self.cg_edge_embedding = nn.Sequential(
+                                   nn.Linear(2 + in_edge_features + distance_embed_dim, ns),
+                                   nn.ReLU(), 
+                                   nn.Dropout(dropout),
+                                   nn.Linear(ns, ns))
 
-        self.cross_edge_embedding = nn.Sequential(nn.Linear(cross_distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
+        self.cross_edge_embedding = nn.Sequential(
+                                   nn.Linear(cross_distance_embed_dim, ns),
+                                   nn.ReLU(), 
+                                   nn.Dropout(dropout),
+                                   nn.Linear(ns, ns))
 
         self.atom_distance_expansion = GaussianSmearing(0.0, atom_max_radius, distance_embed_dim)
         self.cg_distance_expansion = GaussianSmearing(0.0, cg_max_radius, distance_embed_dim)
@@ -131,10 +140,18 @@ class e3nnEncoder(torch.nn.Module):
         self.cg_to_atom_conv_layers = nn.ModuleList(cg_to_atom_conv_layers)
         self.atom_to_cg_conv_layers = nn.ModuleList(atom_to_cg_conv_layers)
 
-        self.dense = nn.Sequential(nn.Linear(84, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
-        # self.dense = nn.Sequential(nn.Linear(96, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
-        
+        self.dense = nn.Sequential(nn.Linear(84, n_atom_basis),
+                                   nn.Tanh(), 
+                                   nn.Linear(n_atom_basis, n_atom_basis))
+
+        # self.dense = nn.Sequential(nn.Linear(84, 48),
+        #                            nn.Tanh(), 
+        #                            nn.Linear(48, n_atom_basis),
+        #                            nn.Tanh(), 
+        #                            nn.Linear(n_atom_basis, n_atom_basis))
+
     def forward(self, z, xyz, cg_z, cg_xyz, mapping, nbr_list, cg_nbr_list):
+
         # build atom graph
         atom_node_attr, atom_edge_index, atom_edge_attr, atom_edge_sh = self.build_atom_conv_graph(z, xyz, nbr_list)        
         atom_src, atom_dst = atom_edge_index
@@ -180,22 +197,22 @@ class e3nnEncoder(torch.nn.Module):
                 cg_node_attr = cg_node_attr + cg_intra_update + cg_inter_update
 
         node_attr = torch.cat([atom_node_attr, cg_node_attr[mapping]], -1)
-        node_attr = scatter_mean(node_attr, mapping, dim=0)
+        node_attr = scatter_mean(node_attr, mapping, dim=0) 
         node_attr = self.dense(node_attr)
         return node_attr, None
 
     def build_atom_conv_graph(self, z, xyz, nbr_list):
-        nbr_list, _ = make_directed(nbr_list) # (506470, 2)
+        nbr_list, _ = make_directed(nbr_list) 
         
-        node_attr = z.long() #(6688)
+        node_attr = z.long() 
         edge_attr = torch.cat([
             z[nbr_list[:,0]].unsqueeze(-1), z[nbr_list[:,1]].unsqueeze(-1),
             torch.zeros(nbr_list.shape[0], self.in_edge_features, device=z.device)
-        ], -1) # (506470, 6)
+        ], -1) 
 
         r_ij = xyz[nbr_list[:, 1]] - xyz[nbr_list[:, 0]]
-        edge_length_emb = self.atom_distance_expansion(r_ij.norm(dim=-1)) #(506470, 8)
-        edge_attr = torch.cat([edge_attr, edge_length_emb], -1) #(506470, 14)
+        edge_length_emb = self.atom_distance_expansion(r_ij.norm(dim=-1)) 
+        edge_attr = torch.cat([edge_attr, edge_length_emb], -1) 
         edge_sh = o3.spherical_harmonics(self.sh_irreps, r_ij, normalize=True, normalization='component')
         
         nbr_list = nbr_list[:,0], nbr_list[:,1]
@@ -220,10 +237,8 @@ class e3nnEncoder(torch.nn.Module):
     def build_cross_conv_graph(self, xyz, cg_xyz, mapping):
         cross_nbr_list = torch.arange(len(mapping)).to(cg_xyz.device), mapping 
         r_iI = (xyz - cg_xyz[mapping])
-
         edge_attr = self.cross_distance_expansion(r_iI.norm(dim=-1))
         edge_sh = o3.spherical_harmonics(self.sh_irreps, r_iI, normalize=True, normalization='component')
-
         return cross_nbr_list, edge_attr, edge_sh
 
 
@@ -244,11 +259,13 @@ class e3nnPrior(torch.nn.Module):
 
         self.num_conv_layers = num_conv_layers
 
-        if n_cgs == None:
-            self.cg_node_embedding = nn.Embedding(30, ns, padding_idx=0)
-        else:
-            self.cg_node_embedding = nn.Embedding(n_cgs, ns, padding_idx=0)
-        self.cg_edge_embedding = nn.Sequential(nn.Linear(2 + in_edge_features + distance_embed_dim, ns), nn.ReLU(), nn.Dropout(dropout),nn.Linear(ns, ns))
+        self.cg_node_embedding = nn.Embedding(30, ns, padding_idx=0)
+        self.cg_edge_embedding = nn.Sequential(
+                                   nn.Linear(2 + in_edge_features + distance_embed_dim, ns),
+                                   nn.ReLU(), 
+                                   nn.Dropout(dropout),
+                                   nn.Linear(ns, ns))
+
         self.cg_distance_expansion = GaussianSmearing(0.0, cg_max_radius, distance_embed_dim)
 
         if use_second_order_repr:
@@ -286,10 +303,23 @@ class e3nnPrior(torch.nn.Module):
             
         self.cg_conv_layers = nn.ModuleList(cg_conv_layers)
         
-        self.mu = nn.Sequential(nn.Linear(48, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
-        self.sigma = nn.Sequential(nn.Linear(48, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
-        # self.mu = nn.Sequential(nn.Linear(45, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
-        # self.sigma = nn.Sequential(nn.Linear(45, n_atom_basis), nn.Tanh(), nn.Linear(n_atom_basis, n_atom_basis))
+        # self.mu = nn.Sequential(nn.Linear(48, n_atom_basis), 
+        #                         nn.Tanh(), 
+        #                         nn.Linear(n_atom_basis, n_atom_basis),
+        #                         nn.Tanh(), 
+        #                         nn.Linear(n_atom_basis, n_atom_basis))
+
+        # self.sigma = nn.Sequential(nn.Linear(48, n_atom_basis), 
+        #                            nn.Tanh(), 
+        #                            nn.Linear(n_atom_basis, n_atom_basis),
+        #                            nn.Tanh(), 
+        #                            nn.Linear(n_atom_basis, n_atom_basis))
+        self.mu = nn.Sequential(nn.Linear(48, n_atom_basis), 
+                                   nn.Tanh(), 
+                                   nn.Linear(n_atom_basis, n_atom_basis))
+        self.sigma = nn.Sequential(nn.Linear(48, n_atom_basis), 
+                                   nn.Tanh(), 
+                                   nn.Linear(n_atom_basis, n_atom_basis))
 
     def forward(self, cg_z, cg_xyz, cg_nbr_list):
         # build cg graph
@@ -307,10 +337,10 @@ class e3nnPrior(torch.nn.Module):
             cg_node_attr = cg_node_attr + cg_intra_update 
 
         H_mu = self.mu(cg_node_attr)
-        H_sigma = self.sigma(cg_node_attr)
+        H_logvar = self.sigma(cg_node_attr)
 
-        H_std = 1e-9 + torch.exp(H_sigma / 2)
-        return H_mu, H_std
+        H_sigma = 1e-9 + torch.exp(H_logvar / 2)
+        return H_mu, H_sigma
 
     def build_cg_conv_graph(self, cg_z, cg_xyz, cg_nbr_list):
         cg_nbr_list, _ = make_directed(cg_nbr_list)

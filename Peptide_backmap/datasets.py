@@ -13,6 +13,7 @@ from sklearn.utils import shuffle
 
 from moleculekit.molecule import Molecule
 import mdtraj as md
+from ase import Atoms
 
 import torch
 from torch.utils.data import DataLoader
@@ -22,6 +23,7 @@ from data import *
 from cgae import *
 from utils_ic import * 
 from utils import shuffle_traj
+from sampling import *
 
 THREE_LETTER_TO_ONE = {
     "ARG": "R", 
@@ -83,12 +85,22 @@ PROTEINFILES = {'covid': {'traj_paths': "../data/DESRES-Trajectory_sarscov2-1144
                               'file_type': 'xtc'}
                 }
 
+PROTEINFILES = {'val_chignolin': {'traj_paths': '/home/soojungy/backmap_exp/data/use_files/val_chignolin.pdb', 
+                                  'pdb_path': '/home/soojungy/backmap_exp/data/use_files/val_chignolin.pdb', 
+                                  'file_type': 'pdb'},
+                'train_chignolin': {'traj_paths': '/home/soojungy/backmap_exp/data/use_files/train_chignolin.pdb', 
+                                  'pdb_path': '/home/soojungy/backmap_exp/data/use_files/train_chignolin.pdb', 
+                                  'file_type': 'pdb'}
+                }
+
 prefixs = ['PED']
 # PED_PDBs = [glob.glob(f'../data/processed/{prefix}*.pdb') for prefix in prefixs]
-PED_PDBs = [glob.glob(f'/home/soojungy/eofe8_mnt/use_files/{prefix}*.pdb') for prefix in prefixs]
+PED_PDBs = [glob.glob(f'/home/gridsan/sjyang/backmap_exp/data/use_files/{prefix}*.pdb') for prefix in prefixs] + \
+           [glob.glob(f'/home/soojungy/backmap_exp/data/use_files/{prefix}*.pdb') for prefix in prefixs]
+
 for idx, prefix_files in enumerate(PED_PDBs):
     for PDBfile in prefix_files:
-        ID = PDBfile.split('/')[-1].split('.')[0][len(prefixs[idx]):]
+        ID = PDBfile.split('/')[-1].split('.')[0][len(prefixs[0]):]
         dct = {ID: {'pdb_path': PDBfile,
                 'traj_paths': PDBfile,
                 'file_type': 'pdb'
@@ -481,7 +493,7 @@ def get_atomNum(traj):
 def compute_nbr_list(frame, cutoff):
     
     dist = (frame[None, ...] - frame[:, None, :]).pow(2).sum(-1).sqrt()
-    nbr_list = torch.nonzero(dist < cutoff).numpy()
+    nbr_list = torch.nonzero(0 < dist < cutoff).numpy()
     
     return nbr_list
 
@@ -670,9 +682,32 @@ def build_hier_dataset(bead_mapping, hyperbead_mapping, traj, atom_cutoff, cg_cu
 
     return dataset
 
+bb_list = ['CA', 'C', 'N', 'O', 'H']
+allow_list = ['NO', 'ON', 'SN', 'NS', 'SO', 'OS', 'SS', 'NN', 'OO']
+ring_list = ['PHE', 'TYR', 'TRP', 'HIS']
+ring_name_list = ['CG', 'CZ', 'CE1', 'CE2']
+ion_list = ['ASP', 'GLU', 'ARG', 'LYS']
+ion_name_list = ['OD1', 'OD2', 'NH1', 'NH2', 'NZ']
+import math
+
+def real_number_batch_to_one_hot_vector_bins(real_numbers, bins):
+    """Converts a batch of real numbers to a batch of one hot vectors for the bins the real numbers fall in."""
+    _, indexes = (real_numbers.view(-1, 1) - bins.view(1, -1)).abs().min(dim=1)
+    return indexes_to_one_hot(indexes, n_dims=bins.shape[0])
+    # return indexes
+
+def indexes_to_one_hot(indexes, n_dims=None):
+    """Converts a vector of indexes to a batch of one-hot vectors. """
+    indexes = indexes.type(torch.int64).view(-1, 1)
+    n_dims = n_dims if n_dims is not None else int(torch.max(indexes)) + 1
+    one_hots = torch.zeros(indexes.size()[0], n_dims)
+    one_hots = one_hots.scatter_(1, indexes, 1)
+    # one_hots = one_hots.view(*indexes.shape, -1)
+    return one_hots
+
+from scipy.ndimage import gaussian_filter
 
 def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums, top, order=1, cg_traj=None, prot_idx=None):
-    
     CG_nxyz_data = []
     nxyz_data = []
 
@@ -683,6 +718,8 @@ def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums,
     
     table, _ = top.to_dataframe()
     table['newSeq'] = table['resSeq'] + 5000*table['chainID']
+    
+    # traj = traj.atom_slices()
 
     endpoints = []
     for idx, chainID in enumerate(np.unique(np.array(table.chainID))):
@@ -712,9 +749,7 @@ def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums,
 
     CG_res = list(top.residues)
     CG_res = CG_res[:len(mapping.unique())]
-
     CG_res = torch.LongTensor([RES2IDX[THREE_LETTER_TO_ONE[res.name[:3]]] for res in CG_res]).reshape(-1,1)
-    
     # Aggregate CG coorinates 
     for i, nxyz in enumerate(tqdm(nxyz_data, desc='generate CG', file=sys.stdout)):
         xyz = torch.Tensor(nxyz[:, 1:]) 
@@ -736,9 +771,10 @@ def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums,
     n_res = len(res_list)
     mask = torch.zeros(n_res-2,13)
     for i in tqdm(range(1,n_res-1), desc='generate mask', file=sys.stdout):
-        # num_atoms = len(table.loc[table.resSeq==res_list[i]])-1
         if res_list[i] not in endpoints:
             num_atoms = len(table.loc[table.newSeq==res_list[i]])-1
+            # resname = table.loc[table.newSeq==res_list[i]].resName.values[0]
+            # num_atoms = len(pred_atoms[resname]) #without rings
             mask[i-1][:num_atoms] = torch.ones(num_atoms)    
     mask = mask.reshape(-1)
 
@@ -746,6 +782,12 @@ def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums,
     mask_xyz_list = []
     for res in interm_endpoints:
         mask_xyz_list += list(table.loc[table.newSeq==res].index)
+
+    # ring  
+    # mask_xyz_list += list(table.loc[table.resName=='HIS'].loc[table.name.isin(['NE2', 'CE1'])].index)
+    # mask_xyz_list += list(table.loc[table.resName=='PHE'].loc[table.name.isin(['CE1', 'CZ', 'CE2'])].index)
+    # mask_xyz_list += list(table.loc[table.resName=='TYR'].loc[table.name.isin(['CE2', 'CZ', 'CE1', 'OH'])].index)
+    # mask_xyz_list += list(table.loc[table.resName=='TRP'].loc[table.name.isin(['NE1', 'CE2', 'CZ2', 'CH2', 'CE3', 'CZ3'])].index)
     mask_xyz = torch.LongTensor(np.array(mask_xyz_list) - nfirst)
 
     # mask_xyz = torch.ones(len(nxyz_data[0]))
@@ -761,9 +803,20 @@ def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums,
     bb_ic = torch.Tensor(get_backbone_ic(md.Trajectory(traj, top)))
     sc_ic = torch.Tensor(get_sidechain_ic(md.Trajectory(traj, top)))    
     ic_list = torch.cat((bb_ic, sc_ic), axis=2)
+    ic_list[:,:,:,1:] = ic_list[:,:,:,1:]%(2*math.pi) 
     ic_list = [ic_list[i] for i in range(len(ic_list))]
-    print(f"generate ic end {time.time()-st} sec")
 
+    # n_bins = 36
+    # bins = torch.arange(0,n_bins) * 2 * math.pi/n_bins + math.pi/n_bins
+    # ic_torsion = real_number_batch_to_one_hot_vector_bins(ic_list[:,:,:,2], bins)
+    # ic_torsion = gaussian_filter(ic_torsion, sigma=1)
+    # ic_torsion = torch.Tensor(ic_torsion.reshape(ic_list.shape[0], ic_list.shape[1], ic_list.shape[2],-1))
+
+    # ic_torsion_list = [ic_torsion[i] for i in range(len(ic_torsion))]
+    # ic_list = [ic_list[i][:,:,:2] for i in range(len(ic_list))]
+    
+    print(f"generate ic end {time.time()-st} sec")
+    
     props = {'nxyz': nxyz_data,
              'CG_nxyz': trim_CG_nxyz_data,
              'OG_CG_nxyz': CG_nxyz_data,
@@ -772,6 +825,7 @@ def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums,
              'CG_mapping': CG_mapping_list, 
              'bond_edge_list':  bond_edge_list,
              'ic': ic_list,
+            #  'ic_torsion': ic_torsion_list,
              'mask': mask_list,
              'mask_xyz_list': mask_xyz_list,
              'prot_idx': prot_idx_list
@@ -780,17 +834,19 @@ def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums,
     dataset = props.copy()
     dataset = CGDataset(props.copy())
     dataset.generate_neighbor_list(atom_cutoff=atom_cutoff, cg_cutoff=cg_cutoff)
-    
-    filter_list = ['CA', 'C', 'N', 'O', 'H']
-    allow_list = ['NO', 'ON', 'SN', 'NS', 'SS']
 
-    EPS = 1e-6
     batch_interaction_list = []
-    
-    name_list = np.array(list(table['name']))
-    element_list = np.array(list(table['element']))
+    batch_pi_pi_list = []
+    batch_pi_ion_list = []
+    batch_bb_NO_list = []
+
+    name_list = np.array(list(table['name']))[nfirst:-nlast]
+    element_list = np.array(list(table['element']))[nfirst:-nlast]
+    res_list = np.array(list(table['resName']))[nfirst:-nlast]
+    resSeq_list = np.array(list(table['newSeq']))[nfirst:-nlast]
     for i in tqdm(range(len(nxyz_data)), desc='building interaction list', file=sys.stdout):
-        interaction_list = []
+        
+        # HB, ion-ion interactions
         n = nxyz_data[i].size(0)
         dist = (nxyz_data[i][:,1:].expand(n, n, 3) - nxyz_data[i][:,1:].expand(n, n, 3).transpose(0, 1)
             ).pow(2).sum(dim=2).sqrt()
@@ -798,18 +854,82 @@ def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums,
         src, dst = torch.where((dist <=3.3) & (dist > 0.93))
         src_name, dst_name = name_list[src], name_list[dst]
         src_element, dst_element = element_list[src], element_list[dst]
+        src_res, dst_res = res_list[src], res_list[dst]
         elements = [src_element[i]+dst_element[i] for i in range(len(src_element))]
+        src_seq, dst_seq = resSeq_list[src], resSeq_list[dst]
 
-        cond1 = CG_mapping_list[i][src] != CG_mapping_list[i][dst]
-        cond2 = ~np.isin(src_name, filter_list)
-        cond3 = ~np.isin(dst_name, filter_list)
-        cond4 = np.isin(elements, allow_list)
-        all_cond = (cond1 & (cond2 | cond3) & cond4)
+        cond1 = (src_seq != dst_seq) & (src_seq != (dst_seq + 1)) & (dst_seq != (src_seq + 1))
+        cond2 = ~np.isin(src_name, bb_list) | ~np.isin(dst_name, bb_list)
+        cond3 = np.isin(elements, allow_list)
+        all_cond = (cond1 & cond2 & cond3)
+        
+        # ring
+        # cond4 = ~np.isin(src_res, ring_list) & ~np.isin(src_name, bb_list)
+        # cond5 = ~np.isin(dst_res, ring_list) & ~np.isin(dst_name, bb_list)
+        # all_cond = (cond1 & cond2 & cond3 & cond4 & cond5)
 
         interaction_list = torch.stack([src[all_cond], dst[all_cond]], axis=-1).long()
-
+        interaction_list = interaction_list[interaction_list[:, 1] > interaction_list[:, 0]]
         batch_interaction_list.append(interaction_list)
+
+        # pi-pi interactions
+        src, dst = torch.where((dist <=8.0) & (dist > 1.5))
+        src_res, dst_res = res_list[src], res_list[dst]
+        src_name, dst_name = name_list[src], name_list[dst]
+        src_seq, dst_seq = resSeq_list[src], resSeq_list[dst]
+
+        cond1 = src_seq == dst_seq
+        # cond2 = np.isin(src_res, ['PHE', 'TYR']) & np.isin(src_name, ['CG', 'CZ']) & np.isin(dst_name, ['CG', 'CZ'])
+        # cond3 = np.isin(src_res, ['TRP']) & np.isin(src_name, ['CG', 'CE2']) & np.isin(dst_name, ['CG', 'CE2'])
+        # cond4 = np.isin(src_res, ['HIS']) & np.isin(src_name, ['CG', 'CE1']) & np.isin(dst_name, ['CG', 'CE1'])
+        cond2 = np.isin(src_res, ['PHE', 'TYR', 'TRP']) & np.isin(src_name, ['CD1']) & np.isin(dst_name, ['CD2'])
+        cond3 = np.isin(src_res, ['HIS']) & np.isin(src_name, ['CD1']) & np.isin(dst_name, ['ND1'])
+        
+        # all_cond = (cond1 & (cond2 | cond3 | cond4))
+        all_cond = (cond1 & (cond2 | cond3))
+        ring_end1, ring_end2 = src[all_cond], dst[all_cond]
+        ring_centers = (nxyz_data[i][:,1:][ring_end1] + nxyz_data[i][:,1:][ring_end2])/2
+        n = len(ring_centers)
+        ring_dist = (ring_centers.expand(n, n, 3) - ring_centers.expand(n, n, 3).transpose(0, 1)
+            ).pow(2).sum(dim=2).sqrt()
+
+        src, dst = torch.where((ring_dist <= 5.5) & (ring_dist >= 2.0))
+        pi_pi_list = torch.stack([ring_end1[src], ring_end2[src], ring_end1[dst], ring_end2[dst]], axis=-1).long()  
+        pi_pi_list = pi_pi_list[pi_pi_list[:, 1] > pi_pi_list[:, 0]]
+        pi_pi_list = pi_pi_list[pi_pi_list[:, 3] > pi_pi_list[:, 2]]
+        pi_pi_list = pi_pi_list[pi_pi_list[:, 0] > pi_pi_list[:, 2]]
+        batch_pi_pi_list.append(pi_pi_list)   
+
+        # pi-ion interactions
+        # src, dst = torch.where((dist <=5.5) & (dist > 1.5))
+        # src_res, dst_res = res_list[src], res_list[dst]
+        # src_name, dst_name = name_list[src], name_list[dst]
+        
+        # cond1 = CG_mapping_list[i][src] != CG_mapping_list[i][dst]
+        # cond2 = np.isin(src_res, ring_list) & np.isin(dst_res, ion_list) 
+        # cond3 = np.isin(src_name, ring_element_list) & np.isin(dst_name, ion_element_list)
+        # all_cond = (cond1 & cond2 & cond3)
+
+        # pi_ion_list = torch.stack([src[all_cond], dst[all_cond]], axis=-1).long()
+        # batch_pi_ion_list.append(pi_ion_list)
+
+        # N-O distances
+        src, dst = torch.where((dist <=4.0) & (dist > 1.5))
+        src_name, dst_name = name_list[src], name_list[dst]
+        src_seq, dst_seq = resSeq_list[src], resSeq_list[dst]
+        
+        cond1 = src_seq == (dst_seq + 1)
+        cond2 = (src_name == 'N') & (dst_name == 'O')
+        all_cond = (cond1 & cond2)
+
+        bb_NO_list = torch.stack([src[all_cond], dst[all_cond]], axis=-1).long()
+        batch_bb_NO_list.append(bb_NO_list)
+    
     dataset.props['interaction_list'] = batch_interaction_list
+    dataset.props['pi_pi_list'] = batch_pi_pi_list
+    # dataset.props['pi_ion_list'] = batch_pi_ion_list
+    dataset.props['bb_NO_list'] = batch_bb_NO_list
+
     print("finished creating dataset")
     return dataset
 
@@ -818,31 +938,40 @@ def create_info_dict(dataset_label_list):
     n_cg_list, traj_list, info_dict = [], [], {} 
     cnt = 0
     for idx, label in enumerate(tqdm(dataset_label_list)): 
-        # try:
         traj = shuffle_traj(load_protein_traj(label))
         table, _ = traj.top.to_dataframe()
-        # reslist = list(set(list(table.resSeq)))
         table['newSeq'] = table['resSeq'] + 5000*table['chainID']
         reslist = list(set(list(table.newSeq)))
         reslist.sort()
-        # print(table.head(50))
-        # print(table.tail(50))
+
         n_cg = len(reslist)
         atomic_nums, protein_index = get_atomNum(traj)
 
-        # atomn = [list(table.loc[table.resSeq==res].name) for res in reslist][1:-1]
         atomn = [list(table.loc[table.newSeq==res].name) for res in reslist][1:-1]
         resn = list(table.loc[table.name=='CA'].resName)[1:-1]
-        
+
         atom_idx = []
         permute = []
         permute_idx, atom_idx_idx = 0, 0
+        
+        # ring_cnt_idx = 0
+        # ring_ic_list = []
+        # ring_ic_idx = []
         for i in range(len(resn)):  
             p = [np.where(np.array(core_atoms[resn[i]])==atom)[0][0]+permute_idx for atom in atomn[i]]
             permute.append(p)  
             atom_idx.append(np.arange(atom_idx_idx, atom_idx_idx+len(atomn[i])))
+
+            # if resn[i] in ['TYR', 'TRP', 'HIS', 'PHE']:
+                # for idx in ring_idx[resn[i]]:
+                #     ring_ic_list.append(ring_ic[resn[i]][idx])
+                #     ring_ic_idx.append(ring_cnt_idx+idx)
+            
             permute_idx += len(atomn[i])
             atom_idx_idx += 14
+            # ring_cnt_idx += 13        
+        # ring_ic_idx = torch.LongTensor(ring_ic_idx)
+        # ring_ic_list = torch.stack(ring_ic_list)
 
         atom_orders1 = [[] for _ in range(10)]
         atom_orders2 = [[] for _ in range(10)]
@@ -865,11 +994,11 @@ def create_info_dict(dataset_label_list):
         
         permute = torch.LongTensor(np.concatenate(permute)).reshape(-1)
         atom_idx = torch.LongTensor(np.concatenate(atom_idx)).reshape(-1)
-        
+
         info_dict[cnt] = (permute, atom_idx, atom_orders)
+        # info_dict[cnt] = (permute, atom_idx, atom_orders, ring_ic_list, ring_ic_idx)
         n_cg_list.append(n_cg)
         traj_list.append(traj)
         cnt += 1
-        # except:
-        #     print(f'failed to load {label}')
+
     return n_cg_list, traj_list, info_dict
