@@ -144,12 +144,6 @@ class e3nnEncoder(torch.nn.Module):
                                    nn.Tanh(), 
                                    nn.Linear(n_atom_basis, n_atom_basis))
 
-        # self.dense = nn.Sequential(nn.Linear(84, 48),
-        #                            nn.Tanh(), 
-        #                            nn.Linear(48, n_atom_basis),
-        #                            nn.Tanh(), 
-        #                            nn.Linear(n_atom_basis, n_atom_basis))
-
     def forward(self, z, xyz, cg_z, cg_xyz, mapping, nbr_list, cg_nbr_list):
 
         # build atom graph
@@ -303,17 +297,6 @@ class e3nnPrior(torch.nn.Module):
             
         self.cg_conv_layers = nn.ModuleList(cg_conv_layers)
         
-        # self.mu = nn.Sequential(nn.Linear(48, n_atom_basis), 
-        #                         nn.Tanh(), 
-        #                         nn.Linear(n_atom_basis, n_atom_basis),
-        #                         nn.Tanh(), 
-        #                         nn.Linear(n_atom_basis, n_atom_basis))
-
-        # self.sigma = nn.Sequential(nn.Linear(48, n_atom_basis), 
-        #                            nn.Tanh(), 
-        #                            nn.Linear(n_atom_basis, n_atom_basis),
-        #                            nn.Tanh(), 
-        #                            nn.Linear(n_atom_basis, n_atom_basis))
         self.mu = nn.Sequential(nn.Linear(48, n_atom_basis), 
                                    nn.Tanh(), 
                                    nn.Linear(n_atom_basis, n_atom_basis))
