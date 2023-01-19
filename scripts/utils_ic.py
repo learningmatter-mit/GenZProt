@@ -86,8 +86,6 @@ core_atoms = \
 'SEP': ['O','N','C','CA','CB','OG', 'P', 'OE1', 'OE2', 'OE3'],
 }
 
-# 'ILE': ['O','N','C','CA','CB','CG1','CG2','CD1'],
-
 # original version
 atom_order_list = \
 {'ALA': [[1, 2, 3]],
@@ -325,7 +323,7 @@ def add_atom_to_xyz(newatom_ic, ref_atoms):
     return p
 
 
-def ic_to_xyz_all(CG_nxyz, ic_recon, info):
+def ic_to_xyz_test(CG_nxyz, ic_recon, info):
     permute, atom_idx, atom_orders, ring_ic_list, ring_ic_idx = info
     atom_orders = atom_orders.to(ic_recon.device)
     CG_xyz = CG_nxyz[:, :, 1:]
@@ -359,7 +357,6 @@ def ic_to_xyz_all(CG_nxyz, ic_recon, info):
 
 
 def ic_to_xyz(CG_nxyz, ic_recon, info):
-    # permute, atom_idx, atom_orders, _, _ = info
     permute, atom_idx, atom_orders = info
     atom_orders = atom_orders.to(ic_recon.device)
     CG_xyz = CG_nxyz[:, :, 1:]

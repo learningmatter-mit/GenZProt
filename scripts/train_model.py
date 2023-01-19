@@ -1,6 +1,3 @@
-# sys.path.append("../scripts/")
-# sys.path.append("../src/")
-
 import os 
 import glob
 import sys
@@ -17,7 +14,6 @@ import pandas as pd
 import statsmodels.api as sm
 
 sys.path.append("../Peptide_backmap/")
-# import CoarseGrainingVAE
 from data import CGDataset, CG_collate
 from cgvae import *
 from e3nn_enc import e3nnEncoder, e3nnPrior
@@ -85,10 +81,12 @@ def run_cv(params):
     atom_cutoff = params['atom_cutoff']
     cg_cutoff = params['cg_cutoff']
 
-    # for CGVAE
+    # for model
     enc_nconv  = params['enc_nconv']
     dec_nconv  = params['dec_nconv']
-    
+    enc_type = params['enc_type']
+    dec_type = params['dec_type']
+
     # unused
     activation = params['activation']
     dataset_label = params['dataset']
@@ -102,7 +100,7 @@ def run_cv(params):
     n_cgs  = params['n_cgs']
 
     # set random seed 
-    seed = 42
+    seed = params['seed']
     os.environ['PYTHONHASHSEED']=str(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -120,66 +118,41 @@ def run_cv(params):
     print('cuda: ', torch.cuda.is_available())
     print('using cuda: ', torch.cuda.current_device())
     device = torch.cuda.current_device()
-    device = 1
 
     # Load PED files
-    train_prefixs = ['PED00158', 'PED00104', 'PED00094', 'PED00141',
-       'PED00043', 'PED00052', 'PED00160', 'PED00161', 'PED00072',
-       'PED00098', 'PED00100', 
-       'PED00121', 'PED00054', 'PED00119', 'PED00143', 'PED00097',
-       'PED00155', 'PED00092', 'PED00180', 'PED00050',
-       'PED00125', 'PED00004', 'PED00111',
-       'PED00024', 'PED00145',
-       'PED00101', 'PED00095', 'PED00109', 'PED00115',
-       'PED00053', 'PED00175', 'PED00041',
-       'PED00062', 'PED00113', 'PED00085',
-       'PED00150', 'PED00193', 'PED00077', 'PED00044',
-       'PED00217', 'PED00114', 'PED00181', 'PED00185', 'PED00003',
-       'PED00159', 'PED00156', 'PED00123', 'PED00120',
-       'PED00074', 'PED00088',
-       'PED00099', 'PED00022', 'PED00040', 'PED00148',
-       'PED00045', 'PED00011', 'PED00118', 'PED00112',
-       'PED00225', 'PED00032',
-       'PED00086', 'PED00157', 'PED00013', 'PED00117', 'PED00034',
-       'PED00006', 'PED00033', 'PED00227', 'PED00220',
-       'PED00056', 'PED00078', 'PED00107',
-       'PED00051', 'PED00102', 'PED00132',
-       'PED00093', 'PED00135', 
-       'PED00073', 'PED00192', 'PED00025', 'PED00087', 'PED00023',
-       'PED00046', 'PED00036', 'PED00124',
-       'PED00190', 'PED00126', 'PED00080'
-       ]
+    train_label_list = \
+        ['00033e000', '00053e000', '00050e000', '00073e000', '00078e000',
+         '00132e000', '00113e000', '00034e000', '00044e000', '00032e000',
+         '00160e002', '00094e000', '00124e000', '00013e001', '00054e000',
+         '00181ecut', '00056e000', '00003e001', '00175e024', '00175e028',
+         '00175e025', '00175e029', '00175e022', '00175e023', '00175e026',
+         '00175e027', '00175e021', '00175e020', '00051e000', '00114e000',
+         '00004e001', '00150ecut0', '00150ecut2', '00150ecut1', '00080e000',
+         '00156e002', '00193e003', '00145ecut2', '00145ecut1', '00145ecut0',
+         '00022e012', '00022e011', '00022e013', '00022e001', '00022e009',
+         '00022e002', '00022e005', '00022e007', '00022e008', '00022e010',
+         '00022e003', '00022e004', '00022e006', '00141e001', '00159e002',
+         '00095e000', '00087e000', '00180ecut', '00120e000', '00006e001',
+         '00074e000', '00225e000', '00011ecut', '00088e000', '00107e000',
+         '00085e000', '00112e000', '00023e001', '00023e002', '00023e003',
+         '00157e002', '00192e002', '00046e000', '00220e000', '00115e000',
+         '00190e000', '00100e000', '00148ecut1', '00148ecut2', '00072e000',
+         '00217e000','00125e000', '00158e006', '00077e000', '00043e000',
+         '00104e000', '00123e000', '00117e000', '00098e000', '00185e000',
+         '00126e000', '00143ecut', '00099e000', '00036e000', '00024e001',
+         '00161e002', '00118e000', '00119e000', '00041e000', '00045e000',
+         '00121e000', '00092e000', '00109e000', '00155ecut', '00111e000',
+         '00227e000', '00097e000', '00093e000', '00025ecut', '00062e000',
+         '00052e000', '00101e000', '00102e000', '00086e000', '00040e000',
+         '00135e000']
 
-    # 'PED00174', 'PED00191', 'PED00187', 'PED00162', 'PED00019', 'PED00215', 'PED00214', 'PED00213', 'PED00212', 'PED00194', 'PED00076'
-    # val_prefixs = ['PED00048', 'PED00151', 'PED00082', 'PED00090']
-    # # val_prefixs = ['PED00080', 'PED00036', 'PED00174', 'PED00022', 'PED00159']
-    val_prefixs = ['PED00151', 'PED00090', 'PED00055', 'PED00218']
+    val_label_list = ['00151ecut0', '00151ecut2', '00151ecut1', '00090e000', '00055e000', '00218e000']
+
+    # For single chemistry training    
+    # train_label_list = ['00151ecut1', '00151ecut2']
+    # val_label_list = ['00151ecut0']
     
-    # train_prefixs = ['PED00150ecut0', 'PED00150ecut1']
-    # val_prefixs = ['PED00150ecut2']
-    
-    train_prefixs = list(set(train_prefixs))
-    print("num training data entries", len(train_prefixs))
-    train_label_list, val_label_list = [], []
-    train_PED_PDBs = []
-    for prefix in train_prefixs:
-        train_PED_PDBs += glob.glob(f'/home/gridsan/sjyang/backmap_exp/data/use_files/{prefix}*.pdb')
-        train_PED_PDBs += glob.glob(f'/home/soojungy/backmap_exp/data/use_files/{prefix}*.pdb')        
-           
-    for PDBfile in train_PED_PDBs:
-        ID = PDBfile.split('/')[-1].split('.')[0][3:]
-        train_label_list.append(ID)
-
-    val_PED_PDBs = []
-    for prefix in val_prefixs:
-        val_PED_PDBs += glob.glob(f'/home/gridsan/sjyang/backmap_exp/data/use_files/{prefix}*.pdb')
-        val_PED_PDBs += glob.glob(f'/home/soojungy/backmap_exp/data/use_files/{prefix}*.pdb')        
-    for PDBfile in val_PED_PDBs:
-        ID = PDBfile.split('/')[-1].split('.')[0][3:]
-        val_label_list.append(ID)
-
-    # train_label_list = ['train_chignolin']
-    # val_label_list = ['val_chignolin']
+    print("num training data entries", len(train_label_list))
     
     train_n_cg_list, train_traj_list, info_dict = create_info_dict(train_label_list)
     val_n_cg_list, val_traj_list, val_info_dict = create_info_dict(val_label_list)
@@ -227,26 +200,40 @@ def run_cv(params):
     else:
         breaksym = False
 
-    # decoder = EquivariantDecoder(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=atom_cutoff, num_conv = dec_nconv, activation=activation)
-    # encoder = EquiEncoder(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=atom_cutoff)
-    # cgPrior = CGprior(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=cg_cutoff)
+    # Z-matrix generation or xyz generation
+    if dec_type == 'ic_dec': ic_flag = True
+    else: ic_flag = False
 
-    decoder = InternalDecoder56(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
+    if ic_flag:
+        decoder = InternalDecoder56(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
+    else:
+        decoder = EquivariantPsuedoDecoder(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation, breaksym=breaksym)
 
-    encoder = e3nnEncoder(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
-    cross_max_distance=cg_cutoff+5, atom_max_radius=atom_cutoff+5, cg_max_radius=cg_cutoff+5)
-    cgPrior = e3nnPrior(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
-    cg_max_radius=cg_cutoff+5)
-    
+    if enc_type == 'equiv_enc':
+        encoder = e3nnEncoder(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
+        cross_max_distance=cg_cutoff+5, atom_max_radius=atom_cutoff+5, cg_max_radius=cg_cutoff+5)
+        cgPrior = e3nnPrior(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
+        cg_max_radius=cg_cutoff+5)
+    else:
+        encoder = EquiEncoder(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=atom_cutoff)
+        cgPrior = CGprior(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=cg_cutoff)
+
     atom_mu = nn.Sequential(nn.Linear(n_basis, n_basis), nn.ReLU(), nn.Linear(n_basis, n_basis))
     atom_sigma = nn.Sequential(nn.Linear(n_basis, n_basis), nn.ReLU(), nn.Linear(n_basis, n_basis))
-    model = peptideCGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
+
+    if ic_flag:
+        model = peptideCGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
+    else:
+        model = CGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
+
+    # load_model_path='./test37_dec56_notorsion_beta1e-1_max1e-2_01-11_sample'
+    # model.load_state_dict(torch.load(os.path.join(load_model_path, f'model_132.pt'), map_location=torch.device('cpu')))
+    # model.to(device)
 
     optimizer = optim(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, patience=5, 
                                                             factor=factor, verbose=True, 
                                                             threshold=threshold,  min_lr=min_lr, cooldown=1)
-    # early_stopping = EarlyStopping(patience=patience)
     early_stopping = EarlyStopping(patience=20)
     
     model.train()
@@ -265,7 +252,7 @@ def run_cv(params):
                                                     train=True,
                                                     looptext='epoch {} train'.format(epoch),
                                                     tqdm_flag=tqdm_flag,
-                                                    ic_flag=True, info_dict=info_dict)
+                                                    ic_flag=ic_flag, info_dict=info_dict)
 
 
         val_loss, mean_kl_val, mean_recon_val, mean_graph_val, mean_nbr_val, mean_inter_val, mean_xyz_val = loop(valloader, optimizer, device,
@@ -273,7 +260,7 @@ def run_cv(params):
                                                     train=False,
                                                     looptext='epoch {} train'.format(epoch),
                                                     tqdm_flag=tqdm_flag,
-                                                    ic_flag=True, info_dict=info_dict)
+                                                    ic_flag=ic_flag, info_dict=info_dict)
 
         stats = {'epoch': epoch, 'lr': optimizer.param_groups[0]['lr'], 
                 'train_loss': train_loss, 'val_loss': val_loss, 
@@ -329,6 +316,7 @@ if __name__ == '__main__':
     parser.add_argument("-cg_method", type=str, default='minimal')
 
     # training
+    parser.add_argument("-seed", type=int, default=12345)
     parser.add_argument("-batch_size", type=int, default=64)
     parser.add_argument("-optimizer", type=str, default='adam')
     parser.add_argument("-nepochs", type=int, default=2)
@@ -346,8 +334,8 @@ if __name__ == '__main__':
     parser.add_argument("-eta", type=float, default=0.01)
 
     # model
-    parser.add_argument("-dec_type", type=str, default='InternalDecoder2')
-    parser.add_argument("-enc_type", type=str, default='e3nnEncoder')
+    parser.add_argument("-enc_type", type=str, default='equiv_enc')
+    parser.add_argument("-dec_type", type=str, default='ic_dec')
 
     parser.add_argument("-n_basis", type=int, default=512)
     parser.add_argument("-n_rbf", type=int, default=10)
@@ -391,12 +379,6 @@ if __name__ == '__main__':
             t_args.__dict__.update(json.load(f))
             params = vars(parser.parse_args(namespace=t_args))
 
-    # add more info about this job 
-    if params['det']:
-        task = 'recon'
-    else:
-        task = 'sample'
-
-    params['logdir'] = annotate_job(task, params['logdir'])
+    params['logdir'] = annotate_job(params['seed'], params['logdir'])
     print(params['logdir'])
     run_cv(params)

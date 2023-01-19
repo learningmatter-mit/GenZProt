@@ -7,8 +7,6 @@ import json
 import time
 from datetime import timedelta
 import random
-# sys.path.append("../scripts/")
-# sys.path.append("../src/")
 
 from tqdm import tqdm 
 import numpy as np
@@ -25,15 +23,14 @@ from torch_scatter import scatter_mean
 from torch.utils.data import DataLoader
 
 sys.path.append("../Peptide_backmap/")
-# import CoarseGrainingVAE
 from data import CGDataset, CG_collate
 from cgvae import *
 from e3nn_enc import e3nnEncoder, e3nnPrior
 from conv import * 
-from datasets import load_protein_traj, get_atomNum, get_cg_and_xyz, build_ic_peptide_dataset, create_info_dict  
+from datasets import load_protein_traj, get_atomNum, get_cg_and_xyz, build_ic_peptide_dataset, create_info_dict, create_ring_info_dict  
 from utils import * 
 from utils_ic import *
-from sampling import sample_ic as sample
+from sampling import sample_ic, sample_xyz
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -89,9 +86,11 @@ def run_cv(params):
     atom_cutoff = params['atom_cutoff']
     cg_cutoff = params['cg_cutoff']
 
-    # for CGVAE
+    # for model
     enc_nconv  = params['enc_nconv']
     dec_nconv  = params['dec_nconv']
+    enc_type = params['enc_type']
+    dec_type = params['dec_type']
     
     # unused
     activation = params['activation']
@@ -105,11 +104,12 @@ def run_cv(params):
     invariantdec = params['invariantdec']
     n_cgs = params['n_cgs']
 
+    # for testing
     device=3
     batch_size=4
 
     # set random seed 
-    seed = 42
+    seed = params['seed']
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -133,8 +133,11 @@ def run_cv(params):
     for PDBfile in test_PED_PDBs:
         ID = PDBfile.split('/')[-1].split('.')[0][3:]
         dataset_label_list.append(ID)
+    # dataset_label_list=['val_chignolin']
     print(dataset_label_list)
-    n_cg_list, traj_list, info_dict = create_info_dict(dataset_label_list)
+    
+    # n_cg_list, traj_list, info_dict = create_info_dict(dataset_label_list)
+    n_cg_list, traj_list, info_dict = create_ring_info_dict(dataset_label_list)
 
     # create subdirectory 
     create_dir(working_dir)     
@@ -169,6 +172,7 @@ def run_cv(params):
 
         ndata = len(all_idx)-len(all_idx)%batch_size
         all_idx = all_idx[:ndata]
+        all_idx = all_idx[:100]
 
         n_cgs = n_cg_list[i]
         testset, mapping = build_split_dataset(traj[all_idx], params, mapping=None, prot_idx=i)
@@ -183,18 +187,33 @@ def run_cv(params):
     else:
         breaksym = False
 
-    # initialize model 
-    decoder = InternalDecoder56(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
+    # Z-matrix generation or xyz generation
+    if dec_type == 'ic_dec': ic_flag = True
+    else: ic_flag = False
 
-    encoder = e3nnEncoder(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
-    cross_max_distance=cg_cutoff+5, atom_max_radius=atom_cutoff+5, cg_max_radius=cg_cutoff+5)
-    cgPrior = e3nnPrior(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
-    cg_max_radius=cg_cutoff+5)
+    if ic_flag:
+        decoder = InternalDecoder56(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
+    else:
+        decoder = EquivariantPsuedoDecoder(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation, breaksym=breaksym)
+
+    # initialize model 
+    if enc_type == 'equiv_enc':
+        encoder = e3nnEncoder(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
+        cross_max_distance=cg_cutoff+5, atom_max_radius=atom_cutoff+5, cg_max_radius=cg_cutoff+5)
+        cgPrior = e3nnPrior(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
+        cg_max_radius=cg_cutoff+5)
+    else:
+        encoder = EquiEncoder(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=atom_cutoff)
+        cgPrior = CGprior(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=cg_cutoff)
 
     atom_mu = nn.Sequential(nn.Linear(n_basis, n_basis), nn.ReLU(), nn.Linear(n_basis, n_basis))
     atom_sigma = nn.Sequential(nn.Linear(n_basis, n_basis), nn.ReLU(), nn.Linear(n_basis, n_basis))
-    model = peptideCGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec)
-    
+
+    if ic_flag:
+        model = peptideCGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
+    else:
+        model = CGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
+
     optimizer = optim(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, patience=2, 
                                                             factor=factor, verbose=True, 
@@ -219,7 +238,7 @@ def run_cv(params):
                                                                                 atomic_nums,
                                                                                 n_cg=n_cgs,
                                                                                 tqdm_flag=tqdm_flag, reflection=params['reflectiontest'],
-                                                                                ic_flag=True, top_table=None, info_dict=info_dict)
+                                                                                ic_flag=ic_flag, top_table=None, info_dict=info_dict)
 
     epoch = 1
     # this is just to get KL loss 
@@ -228,16 +247,21 @@ def run_cv(params):
                                                 train=False,
                                                 looptext='epoch {} test'.format(epoch),
                                                 tqdm_flag=tqdm_flag,
-                                                ic_flag=True,
+                                                ic_flag=ic_flag,
                                                 info_dict=info_dict
                                                 )
 
     # sample geometries 
-    true_xyzs, recon_xyzs, recon_ics = sample(testloader, device, model, atomic_nums, n_cgs, info_dict)
+    if ic_flag:
+        true_xyzs, recon_xyzs, recon_ics = sample_ic(testloader, device, model, atomic_nums, n_cgs, info_dict)
+        with open(os.path.join(working_dir, f'sample_recon_ic.pkl'), 'wb') as filehandler:
+            pickle.dump(recon_ics, filehandler)
+    else:
+        true_xyzs, recon_xyzs = sample_xyz(testloader, device, model, atomic_nums, n_cgs, info_dict)
+    
     with open(os.path.join(working_dir, f'sample_recon_xyz.pkl'), 'wb') as filehandler:
         pickle.dump(recon_xyzs, filehandler)
-    with open(os.path.join(working_dir, f'sample_recon_ic.pkl'), 'wb') as filehandler:
-        pickle.dump(recon_ics, filehandler)
+
 
     # compute test rmsds  
     test_recon_xyzs = test_recon_xyzs.reshape(-1,n_atoms,3) 
@@ -271,7 +295,7 @@ def run_cv(params):
         print(key, test_stats[key])
 
     cv_stats_pd = cv_stats_pd.append(test_stats, ignore_index=True)
-    cv_stats_pd.to_csv(os.path.join(working_dir, 'cv_stats.csv'),  index=False, float_format='%.4f')
+    cv_stats_pd.to_csv(os.path.join(working_dir, 'cv_stats.csv'),  index=False, float_format='%.6f')
 
     save_runtime(time.time() - start, working_dir)
 
@@ -294,6 +318,7 @@ if __name__ == '__main__':
     parser.add_argument("-cg_method", type=str, default='minimal')
 
     # training
+    parser.add_argument("-seed", type=int, default=12345)
     parser.add_argument("-batch_size", type=int, default=64)
     parser.add_argument("-optimizer", type=str, default='adam')
     parser.add_argument("-nepochs", type=int, default=2)
@@ -311,8 +336,8 @@ if __name__ == '__main__':
     parser.add_argument("-eta", type=float, default=0.01)
 
     # model
-    parser.add_argument("-dec_type", type=str, default='InternalDecoder2')
-    parser.add_argument("-enc_type", type=str, default='e3nnEncoder')
+    parser.add_argument("-enc_type", type=str, default='equiv_enc')
+    parser.add_argument("-dec_type", type=str, default='ic_dec')
 
     parser.add_argument("-n_basis", type=int, default=512)
     parser.add_argument("-n_rbf", type=int, default=10)
@@ -362,9 +387,9 @@ if __name__ == '__main__':
         task = 'recon'
     else:
         task = 'sample'
+
     epoch = params['test_epoch']
-    params['logdir'] += f'_epoch_{epoch}'
-    params['logdir'] += '_test_'
+    params['logdir'] += f'/test_epoch_{epoch}_'
     params['logdir'] += params['test_data']
 
     run_cv(params)
