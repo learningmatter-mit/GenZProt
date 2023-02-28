@@ -1,7 +1,3 @@
-"""
-functions adapted from CGVAE (Wang et al., ICML2022) 
-https://github.com/wwang2/CoarseGrainingVAE/data.py
-"""
 import os 
 import glob
 import sys
@@ -69,6 +65,7 @@ def build_split_dataset(traj, params, mapping=None, n_cgs=None, prot_idx=None):
 
 
 def run_cv(params):
+    data_dir = params['datadir']
     working_dir = params['logdir']
     device  = params['device']
     
@@ -128,10 +125,11 @@ def run_cv(params):
     else:
         print("Sampling Task")
 
+
     dataset_label_list = [params['test_data']]
     print(dataset_label_list)
     
-    n_cg_list, traj_list, info_dict = create_info_dict(dataset_label_list, PROTEINFILES=PROTEINFILES)
+    n_cg_list, traj_list, info_dict = create_info_dict(dataset_label_list)
 
     # create subdirectory 
     create_dir(working_dir)     
@@ -166,7 +164,6 @@ def run_cv(params):
 
         ndata = len(all_idx)-len(all_idx)%batch_size
         all_idx = all_idx[:ndata]
-        all_idx = all_idx[:100]
 
         n_cgs = n_cg_list[i]
         testset, mapping = build_split_dataset(traj[all_idx], params, mapping=None, prot_idx=i)
@@ -181,39 +178,16 @@ def run_cv(params):
     else:
         breaksym = False
 
-    # Z-matrix generation or xyz generation
-    if dec_type == 'ic_dec': ic_flag = True
-    else: ic_flag = False
-
-    if ic_flag:
-        decoder = ZmatInternalDecoder(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
-    else:
-        decoder = EquivariantPsuedoDecoder(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation, breaksym=breaksym)
-
-    # initialize model 
-    if enc_type == 'equiv_enc':
-        encoder = e3nnEncoder(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
-        cross_max_distance=cg_cutoff+5, atom_max_radius=atom_cutoff+5, cg_max_radius=cg_cutoff+5)
-        cgPrior = e3nnPrior(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
-        cg_max_radius=cg_cutoff+5)
-    else:
-        encoder = EquiEncoder(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=atom_cutoff)
-        cgPrior = CGprior(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=cg_cutoff)
+    decoder = ZmatInternalDecoder(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
+    encoder = e3nnEncoder(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
+    cross_max_distance=cg_cutoff+5, atom_max_radius=atom_cutoff+5, cg_max_radius=cg_cutoff+5)
+    cgPrior = e3nnPrior(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
+    cg_max_radius=cg_cutoff+5)
 
     atom_mu = nn.Sequential(nn.Linear(n_basis, n_basis), nn.ReLU(), nn.Linear(n_basis, n_basis))
     atom_sigma = nn.Sequential(nn.Linear(n_basis, n_basis), nn.ReLU(), nn.Linear(n_basis, n_basis))
 
-    if ic_flag:
-        model = GenZProt(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
-    else:
-        model = CGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
-
-    optimizer = optim(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, patience=2, 
-                                                            factor=factor, verbose=True, 
-                                                            threshold=threshold,  min_lr=min_lr)
-    early_stopping = EarlyStopping(patience=patience)
-    
+    model = GenZProt(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
     model.train()
 
     # load model
@@ -224,77 +198,17 @@ def run_cv(params):
 
     print("model loaded successfully")
 
-    print("Starting testing")
-    test_true_xyzs, test_recon_xyzs, test_cg_xyzs, test_all_valid_ratio, test_heavy_valid_ratio, test_all_ged, test_heavy_ged = \
-                                            get_all_true_reconstructed_structures(testloader, 
-                                                                                device,
-                                                                                model,
-                                                                                atomic_nums,
-                                                                                n_cg=n_cgs,
-                                                                                tqdm_flag=tqdm_flag, reflection=params['reflectiontest'],
-                                                                                ic_flag=ic_flag, top_table=None, info_dict=info_dict)
-
-    epoch = 1
-    # this is just to get KL loss 
-    test_loss, mean_kl_test, mean_recon_test, mean_graph_test, mean_nbr_test, mean_inter_test, mean_xyz_test = loop(testloader, optimizer, device,
-                                                model, beta, gamma, delta, eta, zeta, epoch, 
-                                                train=False,
-                                                looptext='epoch {} test'.format(epoch),
-                                                tqdm_flag=tqdm_flag,
-                                                ic_flag=ic_flag,
-                                                info_dict=info_dict
-                             
-                       )
-
-
-    # sample geometries 
-    if ic_flag:
-        true_xyzs, recon_xyzs, recon_ics = sample_ic(testloader, device, model, atomic_nums, n_cgs, info_dict)
-        with open(os.path.join(working_dir, f'sample_recon_ic.pkl'), 'wb') as filehandler:
-            pickle.dump(recon_ics, filehandler)
-    else:
-        true_xyzs, recon_xyzs = sample_xyz(testloader, device, model, atomic_nums, n_cgs, info_dict)
+    print("Sampling geometries")
+    gen_xyzs, cg_xyzs = get_backmapped_structures(testloader, device, model, info_dict=info_dict)
+    
+    with open(os.path.join(working_dir, f'sample_recon_ic.pkl'), 'wb') as filehandler:
+        pickle.dump(gen_xyzs, filehandler)
     
     with open(os.path.join(working_dir, f'sample_recon_xyz.pkl'), 'wb') as filehandler:
-        pickle.dump(recon_xyzs, filehandler)
-
-    # compute test rmsds  
-    test_recon_xyzs = test_recon_xyzs.reshape(-1,n_atoms,3) 
-    test_true_xyzs = test_true_xyzs.reshape(-1,n_atoms,3)
-
-    test_all_dxyz = (test_recon_xyzs - test_true_xyzs)
-    test_all_rmsd = np.sqrt(np.power(test_all_dxyz, 2).sum(-1).mean(-1)) 
-    unaligned_test_all_rmsd = test_all_rmsd.mean() 
-
-    # dump test rmsd 
-    np.savetxt(os.path.join(working_dir, 'test_all_rmsd{:.4f}.txt'.format(unaligned_test_all_rmsd)), np.array([unaligned_test_all_rmsd]))
-
-    # dump result files
-    with open(os.path.join(working_dir, f'rmsd.pkl'), 'wb') as filehandler:
-        pickle.dump(test_all_rmsd, filehandler)
-    with open(os.path.join(working_dir, f'recon_xyz.pkl'), 'wb') as filehandler:
-        pickle.dump(test_recon_xyzs, filehandler)
-    with open(os.path.join(working_dir, f'true_xyz.pkl'), "wb") as filehandler:
-        pickle.dump(test_true_xyzs, filehandler)
-
-    test_stats = {
-            'test_all_recon': unaligned_test_all_rmsd,
-            'test_KL': mean_kl_test, 
-            'test_graph': mean_graph_test,
-            'test_nbr': mean_nbr_test,
-            'test_inter': mean_inter_test,
-            'test_all_valid_ratio': test_all_valid_ratio,
-            'test_all_ged': test_all_ged} 
-
-    for key in test_stats:
-        print(key, test_stats[key])
-
-    cv_stats_pd = cv_stats_pd.append(test_stats, ignore_index=True)
-    cv_stats_pd.to_csv(os.path.join(working_dir, 'cv_stats.csv'),  index=False, float_format='%.6f')
+        pickle.dump(cg_xyzs, filehandler)
 
     save_runtime(time.time() - start, working_dir)
-
-    return cv_stats_pd['test_all_recon'].mean(), cv_stats_pd['test_all_recon'].std()
+    return
 
 
 if __name__ == '__main__':

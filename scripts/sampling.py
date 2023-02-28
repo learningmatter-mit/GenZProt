@@ -1,7 +1,10 @@
+"""
+functions partially adapted and modified from CGVAE (Wang et al., ICML2022) 
+https://github.com/wwang2/CoarseGrainingVAE/data.py
+"""
 from tqdm import tqdm
 import numpy as np
 import mdshare
-# import pyemma
 from ase import io, Atoms
 
 import torch
@@ -266,8 +269,6 @@ def sample_single(batch, model, n_batch, atomic_nums, device, graph_eval=True, r
 
     # compute cg prior 
     H_prior_mu, H_prior_sigma = model.prior_net(cg_z, cg_xyz, CG_nbr_list)
-    # H_prior_mu, H_prior_log_sigma = model.encoder(cg_z, cg_xyz, CG_nbr_list)
-    # H_prior_sigma = 1e-12 + torch.exp(H_prior_log_sigma / 2)
 
     sample_xyzs = []
     recon_atoms_list = []
@@ -471,8 +472,7 @@ def sample_ic(loader, device, model, atomic_nums, n_cgs, info_dict=None, tqdm_fl
             recon_ics[ens].append(ic_recon.detach().cpu().numpy())
 
             ic_recon = ic_recon.reshape(-1, nres-2, 13, 3)
-            xyz_recon = ic_to_xyz_test(OG_CG_nxyz, ic_recon, info).reshape(-1,3)
-            # xyz_recon = ic_to_xyz(OG_CG_nxyz, ic_recon, info)#.reshape(-1,3)
+            xyz_recon = ic_to_xyz(OG_CG_nxyz, ic_recon, info)
             xyz_recon = xyz_recon.reshape(-1,3)
 
             mask_xyz = batch['mask_xyz_list']

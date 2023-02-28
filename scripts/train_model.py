@@ -13,12 +13,13 @@ from tqdm import tqdm
 import pandas as pd
 import statsmodels.api as sm
 
-sys.path.append("../Peptide_backmap/")
+sys.path.append("../GenZProt/")
 from data import CGDataset, CG_collate
 from cgvae import *
+from genzprot import *
 from e3nn_enc import e3nnEncoder, e3nnPrior
 from conv import * 
-from datasets import load_protein_traj, get_atomNum, get_cg_and_xyz, build_ic_peptide_dataset, create_info_dict  
+from datasets import *
 from utils import * 
 from utils_ic import *
 from sampling import * 
@@ -62,7 +63,7 @@ def build_split_dataset(traj, params, mapping=None, n_cgs=None, prot_idx=None):
 def run_cv(params):
     working_dir = params['logdir']
     device  = params['device']
-    
+
     batch_size  = params['batch_size']
     nepochs = params['nepochs']
     lr = params['lr']
@@ -75,6 +76,7 @@ def run_cv(params):
     gamma = params['gamma']
     delta = params['delta']
     eta = params['eta']
+    zeta = params['zeta']
 
     n_basis  = params['n_basis']
     n_rbf  = params['n_rbf']
@@ -120,42 +122,18 @@ def run_cv(params):
     device = torch.cuda.current_device()
 
     # Load PED files
-    train_label_list = \
-        ['00033e000', '00053e000', '00050e000', '00073e000', '00078e000',
-         '00132e000', '00113e000', '00034e000', '00044e000', '00032e000',
-         '00160e002', '00094e000', '00124e000', '00013e001', '00054e000',
-         '00181ecut', '00056e000', '00003e001', '00175e024', '00175e028',
-         '00175e025', '00175e029', '00175e022', '00175e023', '00175e026',
-         '00175e027', '00175e021', '00175e020', '00051e000', '00114e000',
-         '00004e001', '00150ecut0', '00150ecut2', '00150ecut1', '00080e000',
-         '00156e002', '00193e003', '00145ecut2', '00145ecut1', '00145ecut0',
-         '00022e012', '00022e011', '00022e013', '00022e001', '00022e009',
-         '00022e002', '00022e005', '00022e007', '00022e008', '00022e010',
-         '00022e003', '00022e004', '00022e006', '00141e001', '00159e002',
-         '00095e000', '00087e000', '00180ecut', '00120e000', '00006e001',
-         '00074e000', '00225e000', '00011ecut', '00088e000', '00107e000',
-         '00085e000', '00112e000', '00023e001', '00023e002', '00023e003',
-         '00157e002', '00192e002', '00046e000', '00220e000', '00115e000',
-         '00190e000', '00100e000', '00148ecut1', '00148ecut2', '00072e000',
-         '00217e000','00125e000', '00158e006', '00077e000', '00043e000',
-         '00104e000', '00123e000', '00117e000', '00098e000', '00185e000',
-         '00126e000', '00143ecut', '00099e000', '00036e000', '00024e001',
-         '00161e002', '00118e000', '00119e000', '00041e000', '00045e000',
-         '00121e000', '00092e000', '00109e000', '00155ecut', '00111e000',
-         '00227e000', '00097e000', '00093e000', '00025ecut', '00062e000',
-         '00052e000', '00101e000', '00102e000', '00086e000', '00040e000',
-         '00135e000']
+    with open('../data/train_id.txt','r') as fh:
+        train_label_list = fh.readlines()
+        train_label_list = [label.strip('\n') for label in train_label_list]
 
-    val_label_list = ['00151ecut0', '00151ecut2', '00151ecut1', '00090e000', '00055e000', '00218e000']
-
-    # For single chemistry training    
-    # train_label_list = ['00151ecut1', '00151ecut2']
-    # val_label_list = ['00151ecut0']
+    with open('../data/val_id.txt','r') as fh:
+        val_label_list = fh.readlines()
+        val_label_list = [label.strip('\n') for label in val_label_list]
     
     print("num training data entries", len(train_label_list))
-    
-    train_n_cg_list, train_traj_list, info_dict = create_info_dict(train_label_list)
-    val_n_cg_list, val_traj_list, val_info_dict = create_info_dict(val_label_list)
+
+    train_n_cg_list, train_traj_list, info_dict = create_info_dict(train_label_list, PROTEINFILES=PROTEINFILES)
+    val_n_cg_list, val_traj_list, val_info_dict = create_info_dict(val_label_list, PROTEINFILES=PROTEINFILES)
 
     val_info_dict = {k+len(train_label_list): val_info_dict[k] for k in val_info_dict.keys()}
     info_dict.update(val_info_dict)
@@ -205,30 +183,30 @@ def run_cv(params):
     else: ic_flag = False
 
     if ic_flag:
-        decoder = InternalDecoder56(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
+        decoder = ZmatInternalDecoder(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
+        print("using invariant decoder")
     else:
         decoder = EquivariantPsuedoDecoder(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation, breaksym=breaksym)
+        print("using CGVAE decoder")
 
     if enc_type == 'equiv_enc':
         encoder = e3nnEncoder(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
         cross_max_distance=cg_cutoff+5, atom_max_radius=atom_cutoff+5, cg_max_radius=cg_cutoff+5)
         cgPrior = e3nnPrior(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
         cg_max_radius=cg_cutoff+5)
+        print("using equivariant encoder")
     else:
         encoder = EquiEncoder(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=atom_cutoff)
         cgPrior = CGprior(n_conv=enc_nconv, n_atom_basis=n_basis, n_rbf=n_rbf, activation=activation, cutoff=cg_cutoff)
+        print("using invariant encoder")
 
     atom_mu = nn.Sequential(nn.Linear(n_basis, n_basis), nn.ReLU(), nn.Linear(n_basis, n_basis))
     atom_sigma = nn.Sequential(nn.Linear(n_basis, n_basis), nn.ReLU(), nn.Linear(n_basis, n_basis))
 
     if ic_flag:
-        model = peptideCGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
+        model = GenZProt(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
     else:
         model = CGequiVAE(encoder, decoder, atom_mu, atom_sigma, n_cgs, feature_dim=n_basis, prior_net=cgPrior, det=det, equivariant= not invariantdec).to(device)
-
-    # load_model_path='./test37_dec56_notorsion_beta1e-1_max1e-2_01-11_sample'
-    # model.load_state_dict(torch.load(os.path.join(load_model_path, f'model_132.pt'), map_location=torch.device('cpu')))
-    # model.to(device)
 
     optimizer = optim(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, patience=5, 
@@ -248,7 +226,7 @@ def run_cv(params):
     for epoch in range(nepochs):
         # train
         train_loss, mean_kl_train, mean_recon_train, mean_graph_train, mean_nbr_train, mean_inter_train, mean_xyz_train = loop(trainloader, optimizer, device,
-                                                    model, beta, gamma, delta, eta, epoch, 
+                                                    model, beta, gamma, delta, eta, zeta, epoch, 
                                                     train=True,
                                                     looptext='epoch {} train'.format(epoch),
                                                     tqdm_flag=tqdm_flag,
@@ -256,7 +234,7 @@ def run_cv(params):
 
 
         val_loss, mean_kl_val, mean_recon_val, mean_graph_val, mean_nbr_val, mean_inter_val, mean_xyz_val = loop(valloader, optimizer, device,
-                                                    model, beta, gamma, delta, eta, epoch, 
+                                                    model, beta, gamma, delta, eta, zeta, epoch, 
                                                     train=False,
                                                     looptext='epoch {} train'.format(epoch),
                                                     tqdm_flag=tqdm_flag,
@@ -274,7 +252,7 @@ def run_cv(params):
         train_log = train_log.append(stats, ignore_index=True)
 
         # smoothen the validation curve 
-        smooth = sm.nonparametric.lowess(train_log['val_loss'].values,  # y
+        smooth = sm.nonparametric.lowess(train_log['val_loss'].values, 
                                         train_log['epoch'].values, # x
                                         frac=0.2)
         smoothed_valloss = smooth[-1, 1]
@@ -328,10 +306,11 @@ if __name__ == '__main__':
     parser.add_argument("-factor", type=float, default=0.6)
 
     # loss
-    parser.add_argument("-beta", type=float, default=0.001)
-    parser.add_argument("-gamma", type=float, default=0.01)
-    parser.add_argument("-delta", type=float, default=0.01)
-    parser.add_argument("-eta", type=float, default=0.01)
+    parser.add_argument("-beta", type=float, default=0.05)
+    parser.add_argument("-gamma", type=float, default=1.0)
+    parser.add_argument("-delta", type=float, default=1.0)
+    parser.add_argument("-eta", type=float, default=1.0)
+    parser.add_argument("-zeta", type=float, default=3.0)
 
     # model
     parser.add_argument("-enc_type", type=str, default='equiv_enc')

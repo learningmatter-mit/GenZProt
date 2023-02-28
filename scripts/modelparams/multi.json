@@ -1,0 +1,41 @@
+{
+    "logdir": "./m1",
+    "datadir": "",
+    "device": 0,
+
+    "batch_size": 4,
+    "seed": 12345,
+    "nepochs": 600,
+
+    "lr": 1e-03,
+    "optimizer": "adam",
+    "threshold": 0.001,
+    "patience": 15,
+    "factor": 0.3,
+
+    "dec_type": "ic_dec",
+    "enc_type": "equiv_enc",
+
+    "n_basis": 36,
+    "n_rbf": 15,
+    "atom_cutoff": 9.0,
+    "cg_cutoff": 21.0, 
+    "edgeorder": 2,
+    "enc_nconv": 3,
+    "dec_nconv": 4,
+
+    "beta": 0.05,
+    "gamma": 1.0,
+    "delta": 1.0,
+    "eta": 1.0,
+    "zeta": 5.0,
+
+    "ndata": 100,
+    
+    "n_cgs": 5,
+    "dataset": "",
+    "activation": "swish",
+    "cg_method": "alpha",
+    "hyper_cg_cutoff": 25.0, 
+    "cgae_reg_weight": 0.25
+}

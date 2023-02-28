@@ -3,62 +3,6 @@ import torch
 import numpy as np
 import mdtraj as md
 
-ring_idx = \
-{
-'TYR': [7, 8, 9, 10],
-'TRP': [7, 8, 9, 10, 11, 12],
-'PHE': [6, 7, 9],
-'HIS': [7, 8]  
-}
-
-ring_ic = \
-{
-'TYR': {7:torch.Tensor([1.38, 2.094, 0.001]),
-        8:torch.Tensor([1.38, 2.094, 0.001]),
-        9:torch.Tensor([1.38, 2.094, 0.001]),
-        10:torch.Tensor([1.38, 2.094, 0.001])
-        },
-'TRP': {7:torch.Tensor([1.37, 1.920, 0.001]),
-        8:torch.Tensor([1.41, 1.868, 0.001]),
-        9:torch.Tensor([1.39, 2.129, 3.141]),
-        10:torch.Tensor([1.37, 2.059, 0.001]),
-        11:torch.Tensor([1.40, 2.094, 0.001]),
-        12:torch.Tensor([1.38, 2.094, 0.001])
-        },  
-'PHE': {6:torch.Tensor([1.38, 2.094, 3.141]),
-        7:torch.Tensor([1.38, 2.094, 0.001]),
-        9:torch.Tensor([1.38, 2.094, 3.141])
-        },     
-'HIS': {7:torch.Tensor([1.37, 1.868, 0.001]),
-        8:torch.Tensor([1.31, 1.885, 0.001]),
-        }
-}
-
-pred_atoms = \
-{
-'ALA': ['O','N','C','CA','CB'],
-'ARG': ['O','N','C','CA','CB','CG','CD','NE','CZ','NH1','NH2'],
-'ASP': ['O','N','C','CA','CB','CG','OD1','OD2'],
-'ASN': ['O','N','C','CA','CB','CG','OD1','ND2'],
-'CYS': ['O','N','C','CA','CB','SG'],
-'GLU': ['O','N','C','CA','CB','CG','CD','OE1','OE2'],
-'GLN': ['O','N','C','CA','CB','CG','CD','OE1','NE2'],
-'GLY': ['O','N','C','CA'],
-'HIS': ['O','N','C','CA','CB','CG','CD2','ND1'],
-'ILE': ['O','N','C','CA','CB','CG1','CG2','CD1'],
-'LEU': ['O','N','C','CA','CB','CG','CD1','CD2'],
-'LYS': ['O','N','C','CA','CB','CG','CD','CE','NZ'],
-'MET': ['O','N','C','CA','CB','CG','SD','CE'],
-'PHE': ['O','N','C','CA','CB','CG','CD1','CD2'],
-'PRO': ['O','N','C','CA','CB','CG','CD'],
-'SER': ['O','N','C','CA','CB','OG'],
-'THR': ['O','N','C','CA','CB','OG1','CG2'],
-'TRP': ['O','N','C','CA','CB','CG','CD1','CD2'],
-'TYR': ['O','N','C','CA','CB','CG','CD1','CD2'],
-'VAL': ['O','N','C','CA','CB','CG1','CG2'],
-'TPO': ['O','N','C','CA','CB','OG1','CG2', 'P', 'OE1', 'OE2', 'OE3'],
-'SEP': ['O','N','C','CA','CB','OG', 'P', 'OE1', 'OE2', 'OE3'],
-}
 
 core_atoms = \
 {
@@ -321,39 +265,6 @@ def add_atom_to_xyz(newatom_ic, ref_atoms):
     p = atom1 + d
 
     return p
-
-
-def ic_to_xyz_test(CG_nxyz, ic_recon, info):
-    permute, atom_idx, atom_orders, ring_ic_list, ring_ic_idx = info
-    atom_orders = atom_orders.to(ic_recon.device)
-    CG_xyz = CG_nxyz[:, :, 1:]
-
-    ic_recon = ic_recon.reshape(ic_recon.shape[0],-1,3)
-    ic_recon[:,ring_ic_idx] = ring_ic_list.to(ic_recon.device)
-    ic_recon = ic_recon.reshape(ic_recon.shape[0],-1,13,3)
-
-    N = add_atom_to_xyz(ic_recon[:,:,0], [CG_xyz[:,1:-1], CG_xyz[:,:-2], CG_xyz[:,2:]])
-    C = add_atom_to_xyz(ic_recon[:,:,1], [CG_xyz[:,1:-1], CG_xyz[:,2:], CG_xyz[:,:-2]])
-    O = add_atom_to_xyz(ic_recon[:,:,2], [C, CG_xyz[:,1:-1], N])
-    xyz_recon = torch.stack((O, N, C, CG_xyz[:,1:-1]), axis=2) # O, N, C, CA
-    
-    bs = CG_xyz.shape[0]
-    for i in range(10):
-        current_ic = ic_recon[:,:,3+i]
-
-        current_order1 = atom_orders[i,:,2].reshape(1, -1, 1, 1).repeat(bs, 1, 1, 3)
-        current_order2 = atom_orders[i,:,1].reshape(1, -1, 1, 1).repeat(bs, 1, 1, 3)
-        current_order3 = atom_orders[i,:,0].reshape(1, -1, 1, 1).repeat(bs, 1, 1, 3)
-
-        atom1 = torch.gather(xyz_recon, dim=2, index=current_order1).squeeze()
-        atom2 = torch.gather(xyz_recon, dim=2, index=current_order2).squeeze()
-        atom3 = torch.gather(xyz_recon, dim=2, index=current_order3).squeeze()
-        
-        new_atom = add_atom_to_xyz(current_ic, [atom1, atom2, atom3]).unsqueeze(2)
-        xyz_recon = torch.cat([xyz_recon, new_atom], axis=2)
-        
-    xyz_recon = xyz_recon.reshape(xyz_recon.shape[0],-1,3)[:,atom_idx,:][:,permute,:]
-    return xyz_recon
 
 
 def ic_to_xyz(CG_nxyz, ic_recon, info):
