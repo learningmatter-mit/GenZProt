@@ -37,13 +37,20 @@ pip install -e .
 Saved checkpoint of GenZProt is located in './models/'. 
 Save your C_alpha traces in .pdb format and place them in data_dir.
 ```
-python inference.py -load_model '' -data_dir ''
+ped_id=00055
+MPATH=./ckpt/model_seed_12345.pt
+test_data_path=./data/PED00055_CA_trace.pdb
+python inference.py -load_model_path $MPATH -test_data $test_data_path
 ```
 
-
 ### Training your own GenZProt
+```
+python train_model.py -load_json modelparams/multi.json
+```
 
 ### Test script
 ```
-python test_model.py -load_model '' -data_dir ''
+ped_id=00055
+MPATH=./ckpt/model_seed_12345.pt
+python test_model.py -load_model_path $MPATH -test_data $ped_id
 ```
