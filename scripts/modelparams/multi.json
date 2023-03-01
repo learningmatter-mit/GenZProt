@@ -1,6 +1,5 @@
 {
     "logdir": "./m1",
-    "datadir": "",
     "device": 0,
 
     "batch_size": 4,

@@ -126,7 +126,7 @@ def run_cv(params):
         print("Sampling Task")
 
 
-    dataset_label_list = [params['test_data']]
+    dataset_label_list = [params['inf_data_path']]
     print(dataset_label_list)
     
     n_cg_list, traj_list, info_dict = create_info_dict(dataset_label_list)
@@ -193,7 +193,7 @@ def run_cv(params):
     # load model
     load_model_path = params['load_model_path']
     epoch = params['test_epoch']
-    model.load_state_dict(torch.load(os.path.join(load_model_path, f'model_{epoch}.pt'), map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(load_model_path, map_location=torch.device('cpu')))
     model.to(device)
 
     print("model loaded successfully")
@@ -222,7 +222,7 @@ if __name__ == '__main__':
     parser.add_argument("-device", type=int)
 
     # dataset
-    parser.add_argument("-test_data", type=str, default=None)
+    parser.add_argument("-inf_data_path", type=str, default=None)
     parser.add_argument("-dataset", type=str, default='dipeptide')
     parser.add_argument("-cg_method", type=str, default='minimal')
 
@@ -291,14 +291,9 @@ if __name__ == '__main__':
         t_args.__dict__.update(json.load(f))
         params = vars(parser.parse_args(namespace=t_args))
 
-    # add more info about this job 
-    if params['det']:
-        task = 'recon'
-    else:
-        task = 'sample'
-
     epoch = params['test_epoch']
-    params['logdir'] += f'/test_epoch_{epoch}_'
-    params['logdir'] += params['test_data']
+    params['logdir'] += f'/sample_'
+    data_name = params['inf_data_path'].split('/')[-1].split('.')[0]
+    params['logdir'] += data_name
 
     run_cv(params)

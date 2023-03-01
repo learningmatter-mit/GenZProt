@@ -219,7 +219,7 @@ def run_cv(params):
     # load model
     load_model_path = params['load_model_path']
     epoch = params['test_epoch']
-    model.load_state_dict(torch.load(os.path.join(load_model_path, f'model_{epoch}.pt'), map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(load_model_path, map_location=torch.device('cpu')))
     model.to(device)
 
     print("model loaded successfully")
