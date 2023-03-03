@@ -34,23 +34,27 @@ pip install -e .
 
 ### Backmapping C_alpha traces into all-atom structures  
 
-Saved checkpoint of GenZProt is located in './models/'. 
-Save your C_alpha traces in .pdb format and place them in data_dir.
+Saved checkpoint of GenZProt is located in './ckpt/'. 
+Save your C_alpha traces in .pdb format and pass its path to 'ca_trace_path' argument.
+We need an all-atom pdb file (at least one model/frame) to get the topology and C_alpha mapping. Pass the path to 'topology_path' argument.   
 ```
-ped_id=00055
-MPATH=./ckpt/model_seed_12345.pt
-test_data_path=./data/PED00055_CA_trace.pdb
-python inference.py -load_model_path $MPATH -test_data $test_data_path
+cd script
+MPATH=../ckpt/model_seed_12345
+ca_trace_path=../data/PED00055_CA_trace.pdb
+top_path=../data/PED00055.pdb
+python inference.py -load_model_path $MPATH -ca_trace_path $ca_trace_path -topology_path $top_path
 ```
 
 ### Training your own GenZProt
 ```
+cd script
 python train_model.py -load_json modelparams/multi.json
 ```
 
 ### Test script
 ```
-ped_id=00055
-MPATH=./ckpt/model_seed_12345.pt
-python test_model.py -load_model_path $MPATH -test_data $ped_id
+cd script
+MPATH=../ckpt/model_seed_12345
+test_data_path=../data/PED00055e000.pdb
+python test_model.py -load_model_path $MPATH -test_data_path $test_data_path
 ```
