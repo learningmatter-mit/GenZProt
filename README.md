@@ -1,10 +1,5 @@
 # GenZProt : Chemically Transferable Generative Backmapping of Coarse-Grained Proteins
 
-<object data="http://github.com/SoojungYang/GenZProt/overview.pdf" type="application/pdf" width="700px" height="700px">
-    <embed src="http://github.com/SoojungYang/GenZProt/overview.pdf">
-    </embed>
-</object>
-
 This is a repo accompanying our paper "Chemically Transferable Generative Backmapping of Coarse-Grained Proteins" ([arxiv link](https://arxiv.org/abs/)). 
 
 We propose a geometric generative model for backmmaping fine-grained coordinates from coarse-grained coordinates. It is essentially performing the geometric super-resolution task for molecular geometries. 
@@ -26,7 +21,7 @@ conda env create -f environment.yml
 
 Download and install this package
 ```
-git clone https://github.com/SoojungYang/GenZProt.git
+git clone https://github.com/learningmatter-mit/GenZProt
 cd GenZProt
 conda activate genzprot
 pip install -e . 
