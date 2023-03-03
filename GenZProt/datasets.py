@@ -10,6 +10,7 @@ import itertools
 import random
 from tqdm import tqdm
 import time
+import math
 
 import numpy as np 
 import pickle
@@ -135,6 +136,25 @@ def load_protein_traj(label, ntraj=200, PROTEINFILES=None):
     traj = md.join(trajs)
                    
     return traj
+
+
+def get_alpha_mapping(top):
+    mappings = []
+    table, _ = top.to_dataframe()
+    table['newSeq'] = table['resSeq'] + 5000*table['chainID']
+    reslist = list(set(list(table.newSeq)))
+    reslist.sort()
+
+    j = 0
+    for i in range(len(table)):
+        if table.iloc[i].newSeq == reslist[j]:
+            mappings.append(j)
+        else:
+            j += 1
+            mappings.append(j)
+
+    mapping = np.array(mappings)
+    return mapping
 
 
 def get_cg_and_xyz(traj, params, cg_method='backbone', n_cgs=None, mapshuffle=0.0, mapping=None):
@@ -508,59 +528,151 @@ def build_ic_peptide_dataset(mapping, traj, atom_cutoff, cg_cutoff, atomic_nums,
     return dataset
 
 
-def create_info_dict(dataset_label_list, PROTEINFILES=None):
+def create_info_dict(dataset_label_list, PROTEINFILES):
     n_cg_list, traj_list, info_dict = [], [], {} 
     cnt = 0
     for idx, label in enumerate(tqdm(dataset_label_list)): 
         traj = shuffle_traj(load_protein_traj(label, PROTEINFILES=PROTEINFILES))
-        table, _ = traj.top.to_dataframe()
-        table['newSeq'] = table['resSeq'] + 5000*table['chainID']
-        reslist = list(set(list(table.newSeq)))
-        reslist.sort()
-
-        n_cg = len(reslist)
-        atomic_nums, protein_index = get_atomNum(traj)
-
-        atomn = [list(table.loc[table.newSeq==res].name) for res in reslist][1:-1]
-        resn = list(table.loc[table.name=='CA'].resName)[1:-1]
-
-        atom_idx = []
-        permute = []
-        permute_idx, atom_idx_idx = 0, 0
-        
-        for i in range(len(resn)):  
-            p = [np.where(np.array(core_atoms[resn[i]])==atom)[0][0]+permute_idx for atom in atomn[i]]
-            permute.append(p)  
-            atom_idx.append(np.arange(atom_idx_idx, atom_idx_idx+len(atomn[i])))
-            permute_idx += len(atomn[i])
-            atom_idx_idx += 14
-
-        atom_orders1 = [[] for _ in range(10)]
-        atom_orders2 = [[] for _ in range(10)]
-        atom_orders3 = [[] for _ in range(10)]
-        for res_idx, res in enumerate(resn):
-            atom_idx_list = atom_order_list[res]
-            for i in range(10):
-                if i <= len(atom_idx_list)-1:
-                    atom_orders1[i].append(atom_idx_list[i][0])
-                    atom_orders2[i].append(atom_idx_list[i][1])
-                    atom_orders3[i].append(atom_idx_list[i][2])
-                else:
-                    atom_orders1[i].append(0)
-                    atom_orders2[i].append(1)
-                    atom_orders3[i].append(2)
-        atom_orders1 = torch.LongTensor(np.array(atom_orders1))
-        atom_orders2 = torch.LongTensor(np.array(atom_orders2))
-        atom_orders3 = torch.LongTensor(np.array(atom_orders3))
-        atom_orders = torch.stack([atom_orders1, atom_orders2, atom_orders3], axis=-1) # 10, n_res, 3
-        
-        permute = torch.LongTensor(np.concatenate(permute)).reshape(-1)
-        atom_idx = torch.LongTensor(np.concatenate(atom_idx)).reshape(-1)
-
+        (permute, atom_idx, atom_orders), n_cg = traj_to_info(traj)
         info_dict[cnt] = (permute, atom_idx, atom_orders)
         n_cg_list.append(n_cg)
         traj_list.append(traj)
         cnt += 1
-
     return n_cg_list, traj_list, info_dict
 
+def traj_to_into(traj):
+    table, _ = traj.top.to_dataframe()
+    table['newSeq'] = table['resSeq'] + 5000*table['chainID']
+    reslist = list(set(list(table.newSeq)))
+    reslist.sort()
+
+    n_cg = len(reslist)
+    atomic_nums, protein_index = get_atomNum(traj)
+
+    atomn = [list(table.loc[table.newSeq==res].name) for res in reslist][1:-1]
+    resn = list(table.loc[table.name=='CA'].resName)[1:-1]
+
+    atom_idx = []
+    permute = []
+    permute_idx, atom_idx_idx = 0, 0
+    
+    for i in range(len(resn)):  
+        p = [np.where(np.array(core_atoms[resn[i]])==atom)[0][0]+permute_idx for atom in atomn[i]]
+        permute.append(p)  
+        atom_idx.append(np.arange(atom_idx_idx, atom_idx_idx+len(atomn[i])))
+        permute_idx += len(atomn[i])
+        atom_idx_idx += 14
+
+    atom_orders1 = [[] for _ in range(10)]
+    atom_orders2 = [[] for _ in range(10)]
+    atom_orders3 = [[] for _ in range(10)]
+    for res_idx, res in enumerate(resn):
+        atom_idx_list = atom_order_list[res]
+        for i in range(10):
+            if i <= len(atom_idx_list)-1:
+                atom_orders1[i].append(atom_idx_list[i][0])
+                atom_orders2[i].append(atom_idx_list[i][1])
+                atom_orders3[i].append(atom_idx_list[i][2])
+            else:
+                atom_orders1[i].append(0)
+                atom_orders2[i].append(1)
+                atom_orders3[i].append(2)
+    atom_orders1 = torch.LongTensor(np.array(atom_orders1))
+    atom_orders2 = torch.LongTensor(np.array(atom_orders2))
+    atom_orders3 = torch.LongTensor(np.array(atom_orders3))
+    atom_orders = torch.stack([atom_orders1, atom_orders2, atom_orders3], axis=-1) # 10, n_res, 3
+    
+    permute = torch.LongTensor(np.concatenate(permute)).reshape(-1)
+    atom_idx = torch.LongTensor(np.concatenate(atom_idx)).reshape(-1)
+    info = (permute, atom_idx, atom_orders)
+    return info, n_cg
+
+
+def build_cg_dataset(mapping, cg_traj, aa_top, atom_cutoff, cg_cutoff, atomic_nums, order=1, prot_idx=None):
+    CG_nxyz_data = []
+    nxyz_data = []
+    num_atoms_list = []
+    num_CGs_list = []
+    CG_mapping_list = []
+    bond_edge_list = []
+    ic_list = []
+    
+    table, _ = aa_top.to_dataframe()
+    table['newSeq'] = table['resSeq'] + 5000*table['chainID']
+
+    endpoints = []
+    for idx, chainID in enumerate(np.unique(np.array(table.chainID))):
+        tb_chain = table.loc[table.chainID==chainID]
+        first = tb_chain.newSeq.min()
+        last = tb_chain.newSeq.max()
+        endpoints.append(first)
+        endpoints.append(last)
+ 
+    print(f'traj has {table.chainID.max()+1} chains')
+    nfirst = len(table.loc[table.newSeq==table.newSeq.min()])
+    nlast = len(table.loc[table.newSeq==table.newSeq.max()])
+
+    _top = aa_top.subset(np.arange(aa_top.n_atoms)[nfirst:-nlast])
+    bondgraph = _top.to_bondgraph()
+    indices = table.loc[table.name=='CA'].index
+
+    edges = torch.LongTensor( [[e[0].index, e[1].index] for e in bondgraph.edges] )# list of edge list 
+    edges = get_high_order_edge(edges, order, atomic_nums.shape[0])
+
+    CG_res = list(aa_top.residues)
+    CG_res = CG_res[:len(mapping.unique())]
+    CG_res = torch.LongTensor([RES2IDX[THREE_LETTER_TO_ONE[res.name[:3]]] for res in CG_res]).reshape(-1,1)
+    # Aggregate CG coorinates 
+    for i in range(len(cg_traj)):
+        CG_xyz = torch.Tensor(cg_traj[i].xyz[0])
+        CG_nxyz = torch.cat((CG_res, CG_xyz), dim=-1)
+        CG_nxyz_data.append(CG_nxyz)
+        num_CGs_list.append(torch.LongTensor([len(CG_nxyz)-2]))
+        CG_mapping_list.append(mapping[nfirst:-nlast]-1)
+
+    # delete first and last residue
+    trim_CG_nxyz_data = [nxyz[1:-1,:] for nxyz in CG_nxyz_data] 
+
+    res_list = np.unique(np.array(table.newSeq))
+    n_res = len(res_list)
+    mask = torch.zeros(n_res-2,13)
+    for i in tqdm(range(1,n_res-1), desc='generate mask', file=sys.stdout):
+        if res_list[i] not in endpoints:
+            num_atoms = len(table.loc[table.newSeq==res_list[i]])-1
+            mask[i-1][:num_atoms] = torch.ones(num_atoms)    
+    mask = mask.reshape(-1)
+
+    interm_endpoints = set(endpoints)-set([table.newSeq.min(), table.newSeq.max()])
+    mask_xyz_list = []
+    for res in interm_endpoints:
+        mask_xyz_list += list(table.loc[table.newSeq==res].index)
+    mask_xyz = torch.LongTensor(np.array(mask_xyz_list) - nfirst)
+    
+    mask_list = [mask for _ in range(len(cg_traj))]
+    mask_xyz_list = [mask_xyz for _ in range(len(cg_traj))]
+    prot_idx_list = [torch.Tensor([prot_idx]) for _ in range(len(cg_traj))]
+    
+    
+    props = {'nxyz': nxyz_data,
+             'CG_nxyz': trim_CG_nxyz_data,
+             'OG_CG_nxyz': CG_nxyz_data,
+             'num_atoms': num_atoms_list, 
+             'num_CGs':num_CGs_list,
+             'CG_mapping': CG_mapping_list, 
+             'bond_edge_list':  bond_edge_list,
+             'ic': ic_list,
+             'mask': mask_list,
+             'mask_xyz_list': mask_xyz_list,
+             'prot_idx': prot_idx_list
+            }
+    
+    dataset = props.copy()
+    dataset = CGDataset(props.copy())
+    dataset.generate_neighbor_list(atom_cutoff=atom_cutoff, cg_cutoff=cg_cutoff)
+
+    dataset.props['interaction_list'] = []
+    dataset.props['pi_pi_list'] = []
+    dataset.props['bb_NO_list'] = []
+
+    print("finished creating dataset")
+    return dataset

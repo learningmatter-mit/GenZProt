@@ -128,10 +128,9 @@ def run_cv(params):
     else:
         print("Sampling Task")
 
-    dataset_label_list = [params['test_data']]
-    print(dataset_label_list)
-    
-    n_cg_list, traj_list, info_dict = create_info_dict(dataset_label_list, PROTEINFILES=PROTEINFILES)
+    traj = md.load_pdb(params['test_data_path'])
+    info, n_cg = traj_to_into(traj)
+    n_cg_list, traj_list, info_dict = [n_cg], [traj], {0: info}
 
     # create subdirectory 
     create_dir(working_dir)     
@@ -170,16 +169,11 @@ def run_cv(params):
 
         n_cgs = n_cg_list[i]
         testset, mapping = build_split_dataset(traj[all_idx], params, mapping=None, prot_idx=i)
-        print("created dataset-------", dataset_label_list[i])
         testset_list.append(testset)
 
     testset = torch.utils.data.ConcatDataset(testset_list)
     testloader = DataLoader(testset, batch_size=batch_size, collate_fn=CG_collate, shuffle=shuffle_flag, pin_memory=True)
     
-    if n_cgs == 3:
-        breaksym= True 
-    else:
-        breaksym = False
 
     # Z-matrix generation or xyz generation
     if dec_type == 'ic_dec': ic_flag = True
@@ -219,7 +213,7 @@ def run_cv(params):
     # load model
     load_model_path = params['load_model_path']
     epoch = params['test_epoch']
-    model.load_state_dict(torch.load(load_model_path, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(os.path.join(load_model_path, 'model.pt'), map_location=torch.device('cpu')))
     model.to(device)
 
     print("model loaded successfully")
@@ -308,7 +302,7 @@ if __name__ == '__main__':
     parser.add_argument("-device", type=int)
 
     # dataset
-    parser.add_argument("-test_data", type=str, default=None)
+    parser.add_argument("-test_data_path", type=str, default=None)
     parser.add_argument("-dataset", type=str, default='dipeptide')
     parser.add_argument("-cg_method", type=str, default='minimal')
 
@@ -383,8 +377,8 @@ if __name__ == '__main__':
     else:
         task = 'sample'
 
-    epoch = params['test_epoch']
-    params['logdir'] += f'/test_epoch_{epoch}_'
-    params['logdir'] += params['test_data']
+    params['logdir'] += f'/test_'
+    test_data = params['test_data_path'].split('/')[-1].split('.')[0]
+    params['logdir'] += test_data
 
     run_cv(params)

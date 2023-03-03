@@ -31,7 +31,7 @@ from conv import *
 from datasets import *
 from utils import * 
 from utils_ic import *
-from sampling import sample_ic, sample_xyz
+from sampling import sample_ic_backmap
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -40,32 +40,25 @@ warnings.filterwarnings("ignore")
 optim_dict = {'adam':  torch.optim.Adam, 'sgd':  torch.optim.SGD}
 
  
-def build_split_dataset(traj, params, mapping=None, n_cgs=None, prot_idx=None):
+def build_dataset(cg_traj, aa_top, prot_idx=None):
+    atomic_nums = [atom.element.number for atom in aa_top.atoms] 
+    protein_index = aa_top.select("protein")
+    protein_top = aa_top.subset(protein_index)
+    atomic_nums = np.array([atom.element.number for atom in protein_top.atoms])
 
-    if n_cgs == None:
-        n_cgs = params['n_cgs']
+    mapping = torch.LongTensor(get_alpha_mapping(aa_top))
 
-    atomic_nums, protein_index = get_atomNum(traj)
-    new_mapping, frames, cg_coord = get_cg_and_xyz(traj, params=params, cg_method=params['cg_method'], n_cgs=n_cgs,
-                                                     mapshuffle=params['mapshuffle'], mapping=mapping)
-
-    if mapping is None:
-        mapping = new_mapping
-
-    dataset = build_ic_peptide_dataset(mapping,
-                                        frames, 
-                                        params['atom_cutoff'], 
-                                        params['cg_cutoff'],
-                                        atomic_nums,
-                                        traj.top,
-                                        order=params['edgeorder'] ,
-                                        cg_traj=cg_coord, prot_idx=prot_idx)
+    dataset = build_cg_dataset(mapping, 
+                                cg_traj, aa_top, 
+                                params['atom_cutoff'], 
+                                params['cg_cutoff'],
+                                atomic_nums,
+                                prot_idx=prot_idx)
 
     return dataset, mapping
 
 
 def run_cv(params):
-    data_dir = params['datadir']
     working_dir = params['logdir']
     device  = params['device']
     
@@ -125,58 +118,40 @@ def run_cv(params):
     else:
         print("Sampling Task")
 
+    # requires one all-atom pdb (for mapping generation)
+    aa_traj = md.load_pdb(params['topology_path'])
+    info, n_cgs = traj_to_into(aa_traj)
+    info_dict = {0: info}
 
-    dataset_label_list = [params['inf_data_path']]
-    print(dataset_label_list)
-    
-    n_cg_list, traj_list, info_dict = create_info_dict(dataset_label_list)
+    cg_traj = md.load_pdb(params['ca_trace_path'])
 
     # create subdirectory 
     create_dir(working_dir)     
-     
-    cv_stats_pd = pd.DataFrame( { 'test_all_recon': [],
-                    'test_KL': [], 
-                    'test_graph': [],
-                    'test_nbr': [],
-                    'test_inter': [],
-                    'test_all_valid_ratio': [],
-                    'test_all_ged': []}  )
 
     # start timing 
     start =  time.time()
 
     testset_list = []
-    for i, traj in enumerate(traj_list):
-        atomic_nums, protein_index = get_atomNum(traj)
-        table, _ = traj.top.to_dataframe()
-        # multiple chain
-        table['newSeq'] = table['resSeq'] + 5000*table['chainID']
+    atomic_nums, protein_index = get_atomNum(aa_traj)
+    table, _ = aa_traj.top.to_dataframe()
 
-        nfirst = len(table.loc[table.newSeq==table.newSeq.min()])
-        nlast = len(table.loc[table.newSeq==table.newSeq.max()])
+    # multiple chain
+    table['newSeq'] = table['resSeq'] + 5000*table['chainID']
 
-        n_atoms = atomic_nums.shape[0]
-        n_atoms = n_atoms - (nfirst+nlast)
-        atomic_nums = atomic_nums[nfirst:-nlast]
+    nfirst = len(table.loc[table.newSeq==table.newSeq.min()])
+    nlast = len(table.loc[table.newSeq==table.newSeq.max()])
 
-        all_idx = np.arange(len(traj))
-        random.shuffle(all_idx)
+    n_atoms = atomic_nums.shape[0]
+    n_atoms = n_atoms - (nfirst+nlast)
+    atomic_nums = atomic_nums[nfirst:-nlast]
 
-        ndata = len(all_idx)-len(all_idx)%batch_size
-        all_idx = all_idx[:ndata]
+    all_idx = np.arange(len(cg_traj))
+    ndata = len(all_idx)-len(all_idx)%batch_size
+    all_idx = all_idx[:ndata]
 
-        n_cgs = n_cg_list[i]
-        testset, mapping = build_split_dataset(traj[all_idx], params, mapping=None, prot_idx=i)
-        print("created dataset-------", dataset_label_list[i])
-        testset_list.append(testset)
-
-    testset = torch.utils.data.ConcatDataset(testset_list)
+    testset, mapping = build_dataset(cg_traj, aa_traj.top, prot_idx=0)
+    testset = torch.utils.data.ConcatDataset([testset])
     testloader = DataLoader(testset, batch_size=batch_size, collate_fn=CG_collate, shuffle=shuffle_flag, pin_memory=True)
-    
-    if n_cgs == 3:
-        breaksym= True 
-    else:
-        breaksym = False
 
     decoder = ZmatInternalDecoder(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
     encoder = e3nnEncoder(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
@@ -193,19 +168,16 @@ def run_cv(params):
     # load model
     load_model_path = params['load_model_path']
     epoch = params['test_epoch']
-    model.load_state_dict(torch.load(load_model_path, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(os.path.join(params['load_model_path'], 'model.pt'), map_location=torch.device('cpu')))
     model.to(device)
 
     print("model loaded successfully")
 
     print("Sampling geometries")
-    gen_xyzs, cg_xyzs = get_backmapped_structures(testloader, device, model, info_dict=info_dict)
+    gen_xyzs = sample_ic_backmap(testloader, device, model, atomic_nums, n_cgs, info_dict=info_dict)
     
-    with open(os.path.join(working_dir, f'sample_recon_ic.pkl'), 'wb') as filehandler:
+    with open(os.path.join(working_dir, f'sample_xyz.pkl'), 'wb') as filehandler:
         pickle.dump(gen_xyzs, filehandler)
-    
-    with open(os.path.join(working_dir, f'sample_recon_xyz.pkl'), 'wb') as filehandler:
-        pickle.dump(cg_xyzs, filehandler)
 
     save_runtime(time.time() - start, working_dir)
     return
@@ -222,7 +194,8 @@ if __name__ == '__main__':
     parser.add_argument("-device", type=int)
 
     # dataset
-    parser.add_argument("-inf_data_path", type=str, default=None)
+    parser.add_argument("-ca_trace_path", type=str, default=None)
+    parser.add_argument("-topology_path", type=str, default=None)
     parser.add_argument("-dataset", type=str, default='dipeptide')
     parser.add_argument("-cg_method", type=str, default='minimal')
 
@@ -292,8 +265,7 @@ if __name__ == '__main__':
         params = vars(parser.parse_args(namespace=t_args))
 
     epoch = params['test_epoch']
-    params['logdir'] += f'/sample_'
-    data_name = params['inf_data_path'].split('/')[-1].split('.')[0]
-    params['logdir'] += data_name
-
+    model_name = params['load_model_path'].split('/')[-1]
+    data_name = params['ca_trace_path'].split('/')[-1].split('.')[0]
+    params['logdir'] = f'./result_{model_name}_{data_name}'
     run_cv(params)

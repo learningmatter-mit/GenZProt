@@ -151,9 +151,6 @@ def loop(loader, optimizer, device, model, beta, gamma, delta, eta, zeta, epoch,
         if S_mu is not None:
             loss_kl = KL(S_mu, S_sigma, H_prior_mu, H_prior_sigma) 
             loss_kl = torch.maximum(loss_kl-maxkl, torch.tensor(0.0).to(device))
-
-            print("beta     :", "{:.5f}".format(beta))
-            print("kl       : ", "{:.5f}".format(loss_kl.item()))
             kl_loss.append(loss_kl.item())
         else:
             loss_kl = 0.0
@@ -241,22 +238,22 @@ def loop(loader, optimizer, device, model, beta, gamma, delta, eta, zeta, epoch,
 
             n_inter_total = n_inter + n_pi_pi 
 
-            print("n inter  : ", n_inter)
+            # print("n inter  : ", n_inter)
             if n_inter > 0:
                 inter_dist = ((xyz_recon[interaction_list[:, 0]] - xyz_recon[interaction_list[:, 1]]).pow(2).sum(-1) + EPS).sqrt()
                 loss_inter = torch.maximum(inter_dist - 4.0, torch.tensor(0.0).to(device)).mean()
-                print("inter    : ", "{:.5f}".format(loss_inter.item())) 
+                # print("inter    : ", "{:.5f}".format(loss_inter.item())) 
                 loss_inter *= n_inter/n_inter_total
             else:
                 loss_inter = torch.tensor(0.0).to(device)
 
-            print("n pi-pi  : ", n_pi_pi)
+            # print("n pi-pi  : ", n_pi_pi)
             if n_pi_pi > 0:
                 pi_center_0 = (xyz_recon[pi_pi_list[:,0]] + xyz_recon[pi_pi_list[:,1]])/2
                 pi_center_1 = (xyz_recon[pi_pi_list[:,2]] + xyz_recon[pi_pi_list[:,3]])/2
                 pi_pi_dist = ((pi_center_0 - pi_center_1).pow(2).sum(-1) + EPS).sqrt()
                 loss_pi_pi = torch.maximum(pi_pi_dist - 6.0, torch.tensor(0.0).to(device)).mean()
-                print("pi-pi    : ", "{:.5f}".format(loss_pi_pi.item())) 
+                # print("pi-pi    : ", "{:.5f}".format(loss_pi_pi.item())) 
                 loss_inter += loss_pi_pi * n_pi_pi/n_inter_total
             else:
                 loss_pi_pi = torch.tensor(0.0).to(device)
@@ -416,47 +413,6 @@ def get_all_true_reconstructed_structures(loader, device, model, atomic_nums=Non
     heavy_ged = np.array(heavy_ged).mean()
     
     return true_xyzs, recon_xyzs, cg_xyzs, all_valid_ratio, heavy_valid_ratio, all_ged, heavy_ged
-
-
-def get_backmapped_structures(loader, device, model, info_dict=None):
-    model = model.to(device)
-    model.eval()
-
-    gen_xyzs = []
-    cg_xyzs = []
-
-    if tqdm_flag:
-        loader = tqdm(loader, position=0, leave=True) 
-
-    for batch in loader:
-        batch = batch_to(batch, device)
-
-        # TODO: 
-        # Do sample_ic here
-        H_prior_mu, H_prior_sigma, ic_gen = model.backmap(batch)
-
-        nres = batch['num_CGs'][0]+2
-        OG_CG_nxyz = batch['OG_CG_nxyz'].reshape(-1, nres, 4)
-        ic_gen = ic_gen.reshape(-1, nres-2, 13, 3)
-
-        info = info_dict[int(batch['prot_idx'][0])]
-        xyz_gen = ic_to_xyz(OG_CG_nxyz, ic_gen, info).reshape(-1,3)
-        
-        mask_xyz = batch['mask_xyz_list']
-        xyz_gen[mask_xyz] *= 0
-        gen_xyzs.append(xyz_gen.detach().cpu())
-        cg_xyzs.append(batch['CG_nxyz'][:, 1:].detach().cpu())
-
-        memory = torch.cuda.memory_allocated(device) / (1024 ** 2)
-        postfix = ['memory ={:.4f} Mb'.format(memory)]
-        
-        if tqdm_flag:
-            loader.set_postfix_str(' '.join(postfix))
-
-    gen_xyzs = torch.cat(gen_xyzs).numpy()
-    cg_xyzs = torch.cat(cg_xyzs).numpy()
-    
-    return gen_xyzs, cg_xyzs
 
 
 def dump_numpy2xyz(xyzs, atomic_nums, path):
