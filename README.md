@@ -2,7 +2,7 @@
 
 This is a repo accompanying our paper "Chemically Transferable Generative Backmapping of Coarse-Grained Proteins" ([arxiv link](https://arxiv.org/abs/2303.01569)). 
 
-We propose a geometric generative model for backmmaping fine-grained coordinates from coarse-grained coordinates. It is essentially performing the geometric super-resolution task for molecular geometries. 
+We propose a geometric generative model for backmapping all-atom coordinates from (coarse-grained) C_alpha traces of proteins.
 
 ### Download PED data
 ```
