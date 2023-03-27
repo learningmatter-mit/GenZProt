@@ -33,7 +33,7 @@ Saved checkpoint of GenZProt is located in './ckpt/'.
 Save your C_alpha traces in .pdb format and pass its path to 'ca_trace_path' argument.
 We need an all-atom pdb file (at least one model/frame) to get the topology and C_alpha mapping. Pass the path to 'topology_path' argument.   
 ```
-cd script
+cd scripts
 MPATH=../ckpt/model_seed_12345
 ca_trace_path=../data/PED00055_CA_trace.pdb
 top_path=../data/PED00055.pdb
