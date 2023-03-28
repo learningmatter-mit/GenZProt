@@ -95,6 +95,71 @@ class CGDataset(TorchDataset):
         self.props = props
 
     def __len__(self):
+        return len(self.props['nxyz'])
+
+    def __getitem__(self, idx):
+        return {key: val[idx] for key, val in self.props.items()}
+
+    def generate_aux_edges(self, auxcutoff, device='cpu', undirected=True):
+        edge_list = []
+        
+        for nxyz in tqdm(self.props['nxyz'], desc='building aux edge list', file=sys.stdout):
+            edge_list.append(get_neighbor_list(nxyz[:, 1:4], device, auxcutoff, undirected).to("cpu"))
+
+        self.props['bond_edge_list'] = edge_list
+
+    def generate_neighbor_list(self, atom_cutoff, cg_cutoff, device='cpu', undirected=True, use_bond=False):
+
+        #edge_list = []
+        nbr_list = []
+        cg_nbr_list = []
+
+        if not use_bond:
+            for nxyz in tqdm(self.props['nxyz'], desc='building nbr list', file=sys.stdout):
+                nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, atom_cutoff, undirected).to("cpu"))
+        else:
+            nbr_list = self.props['bond_edge_list']
+
+
+        if cg_cutoff is not None:    
+            for nxyz in tqdm(self.props['CG_nxyz'], desc='building CG nbr list', file=sys.stdout):
+                cg_nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, cg_cutoff, undirected).to("cpu"))
+
+        elif cg_cutoff is None :
+            for i, bond in enumerate( self.props['bond_edge_list'] ):
+                
+                mapping = self.props['CG_mapping'][i]
+                n_atoms = self.props[f'num_atoms'][i]
+                n_cgs = self.props[f'num_CGs'][i]
+                adj = torch.zeros(n_atoms, n_atoms)
+                adj[bond[:, 0], bond[:,1]] = 1
+                adj[bond[:, 1], bond[:,0]] = 1
+
+                # get assignment vector 
+                assign = torch.zeros(n_atoms, n_cgs)
+                atom_idx = torch.LongTensor(list(range(n_atoms)))
+
+                assign[atom_idx, mapping] = 1
+                # compute CG ajacency 
+                cg_adj = assign.transpose(0,1).matmul(adj).matmul(assign) 
+
+                cg_nbr = cg_adj.nonzero()
+                cg_nbr = cg_nbr[cg_nbr[:, 0] != cg_nbr[:, 1]]
+
+                cg_nbr_list.append( cg_nbr )
+
+        self.props['nbr_list'] = nbr_list
+        self.props['CG_nbr_list'] = cg_nbr_list
+
+
+class CGDataset_inf(TorchDataset):
+    
+    def __init__(self,
+                 props,
+                 check_props=True):
+        self.props = props
+
+    def __len__(self):
         return len(self.props['CG_nxyz'])
 
     def __getitem__(self, idx):

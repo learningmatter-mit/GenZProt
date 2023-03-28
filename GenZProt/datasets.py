@@ -28,7 +28,7 @@ from torch_scatter import scatter_mean, scatter_add
 from data import * 
 from utils_ic import * 
 from utils import shuffle_traj
-from sampling import *
+
 
 THREE_LETTER_TO_ONE = {
     "ARG": "R", 
@@ -540,7 +540,7 @@ def create_info_dict(dataset_label_list, PROTEINFILES):
         cnt += 1
     return n_cg_list, traj_list, info_dict
 
-def traj_to_into(traj):
+def traj_to_info(traj):
     table, _ = traj.top.to_dataframe()
     table['newSeq'] = table['resSeq'] + 5000*table['chainID']
     reslist = list(set(list(table.newSeq)))
@@ -590,12 +590,8 @@ def traj_to_into(traj):
 
 def build_cg_dataset(mapping, cg_traj, aa_top, atom_cutoff, cg_cutoff, atomic_nums, order=1, prot_idx=None):
     CG_nxyz_data = []
-    nxyz_data = []
-    num_atoms_list = []
     num_CGs_list = []
     CG_mapping_list = []
-    bond_edge_list = []
-    ic_list = []
     
     table, _ = aa_top.to_dataframe()
     table['newSeq'] = table['resSeq'] + 5000*table['chainID']
@@ -613,6 +609,7 @@ def build_cg_dataset(mapping, cg_traj, aa_top, atom_cutoff, cg_cutoff, atomic_nu
     nlast = len(table.loc[table.newSeq==table.newSeq.max()])
 
     _top = aa_top.subset(np.arange(aa_top.n_atoms)[nfirst:-nlast])
+
     bondgraph = _top.to_bondgraph()
     indices = table.loc[table.name=='CA'].index
 
@@ -651,28 +648,23 @@ def build_cg_dataset(mapping, cg_traj, aa_top, atom_cutoff, cg_cutoff, atomic_nu
     mask_list = [mask for _ in range(len(cg_traj))]
     mask_xyz_list = [mask_xyz for _ in range(len(cg_traj))]
     prot_idx_list = [torch.Tensor([prot_idx]) for _ in range(len(cg_traj))]
-    
-    
-    props = {'nxyz': nxyz_data,
-             'CG_nxyz': trim_CG_nxyz_data,
+
+    num_atoms_list = [torch.LongTensor([aa_top.n_atoms-(nfirst+nlast)]) for _ in range(len(num_CGs_list))]
+    props = {'CG_nxyz': trim_CG_nxyz_data,
              'OG_CG_nxyz': CG_nxyz_data,
-             'num_atoms': num_atoms_list, 
+             
+             'num_atoms': num_atoms_list,
              'num_CGs':num_CGs_list,
              'CG_mapping': CG_mapping_list, 
-             'bond_edge_list':  bond_edge_list,
-             'ic': ic_list,
+
              'mask': mask_list,
              'mask_xyz_list': mask_xyz_list,
              'prot_idx': prot_idx_list
             }
     
     dataset = props.copy()
-    dataset = CGDataset(props.copy())
+    dataset = CGDataset_inf(props.copy())
     dataset.generate_neighbor_list(atom_cutoff=atom_cutoff, cg_cutoff=cg_cutoff)
-
-    dataset.props['interaction_list'] = []
-    dataset.props['pi_pi_list'] = []
-    dataset.props['bb_NO_list'] = []
 
     print("finished creating dataset")
     return dataset
