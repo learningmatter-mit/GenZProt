@@ -45,7 +45,7 @@ ca_trace_path=../data/${ca_trace_name}.pdb
 top_path=../data/PED00055.pdb
 python inference.py -load_model_path $MPATH -ca_trace_path $ca_trace_path -topology_path $top_path
 ```
-The results are saved in both ```.npy``` ( shape = ( 10,n_cg_samples,n_atoms,3 ) ) and ```.pdb``` format, in a directory named ```result_{MPATH}_{ca_trace_name}```.  
+The results are saved in both ```.npy``` ( shape = ( 10,n_cg_samples,n_atoms_truncated,3 ) ) and ```.pdb``` format, in a directory named ```result_{MPATH}_{ca_trace_name}```. Because our algorithm requires i-1th and i+1th C_alpha positions to locate the atoms of the ith residue, it does not backmap the first and the last residue. Hence, ```n_atom_truncated = n_atom - (n_atom_first_res + n_atom_last_res)```.     
 
 
 ### Training your own GenZProt

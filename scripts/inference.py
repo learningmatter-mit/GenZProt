@@ -120,7 +120,7 @@ def run_cv(params):
 
     # requires one all-atom pdb (for mapping generation)
     aa_traj = md.load_pdb(params['topology_path'])
-    info, n_cgs = traj_to_into(aa_traj)
+    info, n_cgs = traj_to_info(aa_traj)
     info_dict = {0: info}
 
     cg_traj = md.load_pdb(params['ca_trace_path'])
