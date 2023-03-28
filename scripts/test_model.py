@@ -129,7 +129,7 @@ def run_cv(params):
         print("Sampling Task")
 
     traj = md.load_pdb(params['test_data_path'])
-    info, n_cg = traj_to_into(traj)
+    info, n_cg = traj_to_info(traj)
     n_cg_list, traj_list, info_dict = [n_cg], [traj], {0: info}
 
     # create subdirectory 
