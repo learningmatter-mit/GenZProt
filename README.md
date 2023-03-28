@@ -2,6 +2,9 @@
 
 ![Overview](./overview.png)  
 
+[//]: # (Badges)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 This is a repo accompanying our paper "Chemically Transferable Generative Backmapping of Coarse-Grained Proteins" ([arxiv link](https://arxiv.org/abs/2303.01569)). 
 
 We propose a geometric generative model for backmapping all-atom coordinates from (coarse-grained) C_alpha traces of proteins.
