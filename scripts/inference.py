@@ -23,7 +23,7 @@ from torch_scatter import scatter_mean
 from torch.utils.data import DataLoader
 
 sys.path.append("../GenZProt/")
-from data import CGDataset, CG_collate
+from data import CGDataset, CG_collate_inf
 from cgvae import *
 from genzprot import *
 from e3nn_enc import e3nnEncoder, e3nnPrior
@@ -47,7 +47,7 @@ def build_dataset(cg_traj, aa_top, prot_idx=None):
     atomic_nums = np.array([atom.element.number for atom in protein_top.atoms])
 
     mapping = torch.LongTensor(get_alpha_mapping(aa_top))
-
+    cg_traj.xyz *= 10
     dataset = build_cg_dataset(mapping, 
                                 cg_traj, aa_top, 
                                 params['atom_cutoff'], 
@@ -144,6 +144,7 @@ def run_cv(params):
     n_atoms = atomic_nums.shape[0]
     n_atoms = n_atoms - (nfirst+nlast)
     atomic_nums = atomic_nums[nfirst:-nlast]
+    _top = aa_traj.top.subset(np.arange(aa_traj.top.n_atoms)[nfirst:-nlast])
 
     all_idx = np.arange(len(cg_traj))
     ndata = len(all_idx)-len(all_idx)%batch_size
@@ -151,7 +152,7 @@ def run_cv(params):
 
     testset, mapping = build_dataset(cg_traj, aa_traj.top, prot_idx=0)
     testset = torch.utils.data.ConcatDataset([testset])
-    testloader = DataLoader(testset, batch_size=batch_size, collate_fn=CG_collate, shuffle=shuffle_flag, pin_memory=True)
+    testloader = DataLoader(testset, batch_size=batch_size, collate_fn=CG_collate_inf, shuffle=shuffle_flag, pin_memory=True)
 
     decoder = ZmatInternalDecoder(n_atom_basis=n_basis, n_rbf = n_rbf, cutoff=cg_cutoff, num_conv = dec_nconv, activation=activation)
     encoder = e3nnEncoder(device=device, n_atom_basis=n_basis, use_second_order_repr=False, num_conv_layers=enc_nconv,
@@ -175,11 +176,14 @@ def run_cv(params):
 
     print("Sampling geometries")
     gen_xyzs = sample_ic_backmap(testloader, device, model, atomic_nums, n_cgs, info_dict=info_dict)
-    
-    with open(os.path.join(working_dir, f'sample_xyz.pkl'), 'wb') as filehandler:
-        pickle.dump(gen_xyzs, filehandler)
-
+    gen_xyzs /= 10
     save_runtime(time.time() - start, working_dir)
+    
+    print("Saving geometries in npy and pdb format")
+    np.save(os.path.join(working_dir, f'sample_xyz.npy'), gen_xyzs)
+    gen_xyzs = gen_xyzs.transpose(1, 0, 2, 3).reshape(-1,gen_xyzs.shape[-2],3)
+    gen_traj = md.Trajectory(gen_xyzs, topology=_top)
+    gen_traj.save_pdb(os.path.join(working_dir, f'sample_traj.pdb'))
     return
 
 

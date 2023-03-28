@@ -95,66 +95,25 @@ class CGDataset(TorchDataset):
         self.props = props
 
     def __len__(self):
-        return len(self.props['nxyz'])
+        return len(self.props['CG_nxyz'])
 
     def __getitem__(self, idx):
         return {key: val[idx] for key, val in self.props.items()}
 
     def generate_aux_edges(self, auxcutoff, device='cpu', undirected=True):
         edge_list = []
-        
-        for nxyz in tqdm(self.props['nxyz'], desc='building aux edge list', file=sys.stdout):
+        for nxyz in tqdm(self.props['CG_nxyz'], desc='building aux edge list', file=sys.stdout):
             edge_list.append(get_neighbor_list(nxyz[:, 1:4], device, auxcutoff, undirected).to("cpu"))
 
         self.props['bond_edge_list'] = edge_list
 
-    def generate_neighbor_list(self, atom_cutoff, cg_cutoff, device='cpu', undirected=True, use_bond=False, prefix=''):
+    def generate_neighbor_list(self, atom_cutoff, cg_cutoff, device='cpu', undirected=True, use_bond=False):
 
-        #edge_list = []
-        nbr_list = []
         cg_nbr_list = []
+        for nxyz in tqdm(self.props['CG_nxyz'], desc='building CG nbr list', file=sys.stdout):
+            cg_nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, cg_cutoff, undirected).to("cpu"))
 
-        if not use_bond:
-            if prefix == '':
-                for nxyz in tqdm(self.props[prefix+'nxyz'], desc='building nbr list', file=sys.stdout):
-                    nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, atom_cutoff, undirected).to("cpu"))
-            else:
-                for nxyz in tqdm(self.props['OG_CG_nxyz'], desc='building nbr list', file=sys.stdout):
-                    nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, atom_cutoff, undirected).to("cpu"))
-
-        else:
-            nbr_list = self.props[prefix+'bond_edge_list']
-
-
-        if cg_cutoff is not None:    
-            for nxyz in tqdm(self.props[prefix+'CG_nxyz'], desc='building CG nbr list', file=sys.stdout):
-                cg_nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, cg_cutoff, undirected).to("cpu"))
-
-        elif cg_cutoff is None :
-            for i, bond in enumerate( self.props[prefix+'bond_edge_list'] ):
-                
-                mapping = self.props[prefix+'CG_mapping'][i]
-                n_atoms = self.props[f'num_{prefix}atoms'][i]
-                n_cgs = self.props[f'num_{prefix}CGs'][i]
-                adj = torch.zeros(n_atoms, n_atoms)
-                adj[bond[:, 0], bond[:,1]] = 1
-                adj[bond[:, 1], bond[:,0]] = 1
-
-                # get assignment vector 
-                assign = torch.zeros(n_atoms, n_cgs)
-                atom_idx = torch.LongTensor(list(range(n_atoms)))
-
-                assign[atom_idx, mapping] = 1
-                # compute CG ajacency 
-                cg_adj = assign.transpose(0,1).matmul(adj).matmul(assign) 
-
-                cg_nbr = cg_adj.nonzero()
-                cg_nbr = cg_nbr[cg_nbr[:, 0] != cg_nbr[:, 1]]
-
-                cg_nbr_list.append( cg_nbr )
-
-        self.props[prefix+'nbr_list'] = nbr_list
-        self.props[prefix+'CG_nbr_list'] = cg_nbr_list
+        self.props['CG_nbr_list'] = cg_nbr_list
 
 
 def CG_collate(dicts):
@@ -171,6 +130,37 @@ def CG_collate(dicts):
         d['bb_NO_list'] = d['bb_NO_list'] + int(n)
         d['interaction_list'] = d['interaction_list'] + int(n)
         d['pi_pi_list'] = d['pi_pi_list'] + int(n)
+            
+    for n, d in zip(cumulative_CGs, dicts):
+        d['CG_mapping'] = d['CG_mapping'] + int(n)
+        d['CG_nbr_list'] = d['CG_nbr_list'] + int(n)
+
+    # batching the data
+    batch = {}
+    for key, val in dicts[0].items():
+        if hasattr(val, 'shape') and len(val.shape) > 0:
+            batch[key] = torch.cat([
+                data[key]
+                for data in dicts
+            ], dim=0)
+
+        elif type(val) == str: 
+            batch[key] = [data[key] for data in dicts]
+        else:
+            batch[key] = torch.stack(
+                [data[key] for data in dicts],
+                dim=0
+            )
+
+    return batch
+
+
+def CG_collate_inf(dicts):
+    cumulative_atoms = np.cumsum([0] + [d['num_atoms'] for d in dicts])[:-1]
+    cumulative_CGs = np.cumsum([0] + [d['num_CGs'] for d in dicts])[:-1]
+
+    for n, d in zip(cumulative_atoms, dicts):
+        d['mask_xyz_list'] = d['mask_xyz_list'] + int(n)
             
     for n, d in zip(cumulative_CGs, dicts):
         d['CG_mapping'] = d['CG_mapping'] + int(n)

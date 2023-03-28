@@ -120,23 +120,22 @@ class GenZProt(nn.Module):
             self.euclidean = nn.Linear(self.encoder.n_atom_basis, self.encoder.n_atom_basis * 3)
         
     def get_inputs(self, batch):
-
-        xyz = batch['nxyz'][:, 1:]
+        # training (all info)
+        if 'nxyz' in batch.keys():
+            xyz = batch['nxyz'][:, 1:]
+            z = batch['nxyz'][:, 0] # atom type
+            nbr_list = batch['nbr_list']
+            ic = batch['ic']
+        # inference (CG info only)
+        else:
+            xyz, z, nbr_list, ic = None, None, None, None
 
         cg_xyz = batch['CG_nxyz'][:, 1:]
         cg_z = batch['CG_nxyz'][:, 0].long()
-        
-        z = batch['nxyz'][:, 0] # atom type
-
         mapping = batch['CG_mapping']
-
-        nbr_list = batch['nbr_list']
         CG_nbr_list = batch['CG_nbr_list']
-        
         num_CGs = batch['num_CGs']
 
-        ic = batch['ic']
-        
         return z, cg_z, xyz, cg_xyz, nbr_list, CG_nbr_list, mapping, num_CGs, ic
         
     def reparametrize(self, mu, sigma):

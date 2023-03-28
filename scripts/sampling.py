@@ -478,8 +478,8 @@ def sample_ic(loader, device, model, atomic_nums, n_cgs, info_dict=None, tqdm_fl
 
             mask_xyz = batch['mask_xyz_list']
             xyz_recon[mask_xyz] *= 0
-
             recon_xyzs[ens].append(xyz_recon.detach().cpu().numpy())
+
         xyz = batch['nxyz'][:, 1:]
         xyz[mask_xyz] *= 0
         true_xyzs.append(xyz.detach().cpu().numpy())
@@ -496,7 +496,6 @@ def sample_ic_backmap(loader, device, model, atomic_nums, n_cgs, info_dict=None,
 
     n_ensemble = 10
     recon_xyzs = [[] for _ in range(n_ensemble)]
-
     n_z = n_cgs
 
     if tqdm_flag:
@@ -519,19 +518,18 @@ def sample_ic_backmap(loader, device, model, atomic_nums, n_cgs, info_dict=None,
             z = sample_normal(H_prior_mu, H_prior_sigma)
 
             ic_recon = model.decoder(cg_z, cg_xyz, CG_nbr_list, None, z, mask=None)   
-            recon_ics[ens].append(ic_recon.detach().cpu().numpy())
-
             ic_recon = ic_recon.reshape(-1, nres-2, 13, 3)
-            xyz_recon = ic_to_xyz(OG_CG_nxyz, ic_recon, info)
-            xyz_recon = xyz_recon.reshape(-1,3)
+            batch_size = ic_recon.shape[0]
 
+            xyz_recon = ic_to_xyz(OG_CG_nxyz, ic_recon, info).reshape(-1,3)
             mask_xyz = batch['mask_xyz_list']
             xyz_recon[mask_xyz] *= 0
-
             recon_xyzs[ens].append(xyz_recon.detach().cpu().numpy())
     
-    recon_xyzs = np.array(recon_xyzs)
-
+    for ens in range(n_ensemble):
+        recon_xyzs[ens] = np.concatenate(recon_xyzs[ens])
+        recon_xyzs[ens] = recon_xyzs[ens].reshape(-1,len(atomic_nums),3)
+    recon_xyzs = np.stack(recon_xyzs)
     return recon_xyzs
 
 
