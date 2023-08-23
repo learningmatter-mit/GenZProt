@@ -36,7 +36,9 @@ pip install -e .
 
 Saved checkpoint of GenZProt is located in './ckpt/'. 
 Save your C_alpha traces in .pdb format and pass its path to 'ca_trace_path' argument.
-We need an all-atom pdb file (at least one model/frame) to get the topology and C_alpha mapping. Pass the path to 'topology_path' argument.   
+We need an all-atom pdb file (at least one model/frame) to get the topology and C_alpha mapping. Pass the path to 'topology_path' argument. Note that GenZProt does not support the backmapping of PTMs, water, or HETATMs. Please remove all PTM atoms (e.g., OXT) and HETATMs from the all-atom pdb file before running the code.    
+
+Example:     
 ```
 cd scripts
 MPATH=../ckpt/model_seed_12345
