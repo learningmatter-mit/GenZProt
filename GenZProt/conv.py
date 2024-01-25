@@ -6,8 +6,8 @@ https://github.com/wwang2/CoarseGrainingVAE/conv.py
 import torch
 from torch import nn 
 
-from modules import * 
-from conv import * 
+from GenZProt.modules import * 
+from GenZProt.conv import * 
 
 from torch_scatter import scatter_mean, scatter_add
 from torch import nn

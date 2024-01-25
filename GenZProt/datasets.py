@@ -25,7 +25,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch_scatter import scatter_mean, scatter_add
 
-from data import * 
+from GenZProt.data import * 
 from utils_ic import * 
 from utils import shuffle_traj
 
@@ -663,7 +663,7 @@ def build_cg_dataset(mapping, cg_traj, aa_top, atom_cutoff, cg_cutoff, atomic_nu
             }
     
     dataset = props.copy()
-    dataset = CGDataset_inf(props.copy())
+    dataset = CGDataset_inf(props.copy()) # perhaps include device here?
     dataset.generate_neighbor_list(atom_cutoff=atom_cutoff, cg_cutoff=cg_cutoff)
 
     print("finished creating dataset")

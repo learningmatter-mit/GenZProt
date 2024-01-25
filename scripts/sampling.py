@@ -439,11 +439,10 @@ def sample(loader, device, model, atomic_nums, n_cgs, tqdm_flag=False):
 
 
 
-def sample_ic(loader, device, model, atomic_nums, n_cgs, info_dict=None, tqdm_flag=False):
+def sample_ic(loader, device, model, atomic_nums, n_cgs, n_ensemble=10, info_dict=None, tqdm_flag=False):
 
     model = model.to(device)
 
-    n_ensemble = 10
     true_xyzs = []
     recon_xyzs = [[] for _ in range(n_ensemble)]
     recon_ics = [[] for _ in range(n_ensemble)]
@@ -490,11 +489,10 @@ def sample_ic(loader, device, model, atomic_nums, n_cgs, info_dict=None, tqdm_fl
     return true_xyzs, recon_xyzs, recon_ics
 
 
-def sample_ic_backmap(loader, device, model, atomic_nums, n_cgs, info_dict=None, tqdm_flag=False):
+def sample_ic_backmap(loader, device, model, atomic_nums, n_cgs, n_ensemble=10, info_dict=None, tqdm_flag=False):
 
     model = model.to(device)
 
-    n_ensemble = 10
     recon_xyzs = [[] for _ in range(n_ensemble)]
     n_z = n_cgs
 
@@ -504,11 +502,12 @@ def sample_ic_backmap(loader, device, model, atomic_nums, n_cgs, info_dict=None,
     info = info_dict[0]
     for batch in loader:
         batch = batch_to(batch, device)
-
         _, cg_z, _, cg_xyz, _, CG_nbr_list, _, num_CGs, _ = model.get_inputs(batch)
 
         nres = batch['num_CGs'][0]+2
         OG_CG_nxyz = batch['OG_CG_nxyz'].reshape(-1, nres, 4)
+        # OG_CG_nxyz = batch['OG_CG_nxyz'].reshape(-1, nres, 8)
+        
 
         # compute cg prior 
         H_prior_mu, H_prior_sigma = model.prior_net(cg_z, cg_xyz, CG_nbr_list)

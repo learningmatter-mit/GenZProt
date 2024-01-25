@@ -2,8 +2,8 @@ import torch
 from torch import nn
 from torch_scatter import scatter_mean, scatter_add
 
-from conv import *
-from e3nn_enc import *
+from GenZProt.conv import *
+from GenZProt.e3nn_enc import *
 
 
 class ZmatInternalDecoder(nn.Module):

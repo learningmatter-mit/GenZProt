@@ -26,13 +26,14 @@ from torch.nn import Sequential
 from torch_scatter import scatter_mean
 from torch.utils.data import DataLoader
 
-sys.path.append("../GenZProt/")
-from data import CGDataset, CG_collate
-from cgvae import *
-from genzprot import *
-from e3nn_enc import e3nnEncoder, e3nnPrior
-from conv import * 
-from datasets import *
+
+
+from GenZProt.data import CGDataset, CG_collate
+from GenZProt.cgvae import *
+from GenZProt.genzprot import *
+from GenZProt.e3nn_enc import e3nnEncoder, e3nnPrior
+from GenZProt.conv import * 
+from GenZProt.datasets import *
 from utils import * 
 from utils_ic import *
 from sampling import sample_ic, sample_xyz
@@ -380,5 +381,10 @@ if __name__ == '__main__':
     params['logdir'] += f'/test_'
     test_data = params['test_data_path'].split('/')[-1].split('.')[0]
     params['logdir'] += test_data
+    # determine type of file 
+    if params["logdir"].split("/")[-1] == ".pdb":
+        params['test_data_path_type'] == "pdb"
+    elif params["logdir"].split("/")[-1] == ".xtc":
+        params['test_data_path_type'] == "xtc"
 
     run_cv(params)
