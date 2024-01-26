@@ -244,11 +244,21 @@ def run_cv(params):
 
     # sample geometries 
     if ic_flag:
-        true_xyzs, recon_xyzs, recon_ics = sample_ic(testloader, device, model, atomic_nums, n_cgs, info_dict)
+        true_xyzs, recon_xyzs, recon_ics = sample_ic(loader=testloader, 
+                                                    device=device, 
+                                                    model=model, 
+                                                    atomic_nums=atomic_nums, 
+                                                    n_cgs=n_cgs, 
+                                                    info_dict=info_dict)
         with open(os.path.join(working_dir, f'sample_recon_ic.pkl'), 'wb') as filehandler:
             pickle.dump(recon_ics, filehandler)
     else:
-        true_xyzs, recon_xyzs = sample_xyz(testloader, device, model, atomic_nums, n_cgs, info_dict)
+        true_xyzs, recon_xyzs = sample_xyz(loader=testloader, 
+                                           device=device, 
+                                           model=model, 
+                                           atomic_nums=atomic_nums, 
+                                           n_cgs=n_cgs, 
+                                           info_dict=info_dict)
     
     with open(os.path.join(working_dir, f'sample_recon_xyz.pkl'), 'wb') as filehandler:
         pickle.dump(recon_xyzs, filehandler)
