@@ -532,11 +532,10 @@ def sample_ic_backmap(loader, device, model, atomic_nums, n_cgs, n_ensemble=10, 
     return recon_xyzs
 
 
-def sample_xyz(loader, device, model, atomic_nums, n_cgs, info_dict=None, tqdm_flag=False):
+def sample_xyz(loader, device, model, atomic_nums, n_cgs, n_ensemble=10, info_dict=None, tqdm_flag=False):
 
     model = model.to(device)
 
-    n_ensemble = 10
     true_xyzs = []
     recon_xyzs = [[] for _ in range(n_ensemble)]
 
