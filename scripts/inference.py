@@ -119,7 +119,7 @@ def run_cv(params):
 
     # requires one all-atom pdb (for mapping generation)
     aa_traj = md.load_pdb(params['topology_path'])
-    # TODO: add flag, throw ValueError if any hydrogens in the all-atom file?
+    # throw ValueError if any hydrogens in the all-atom file.
     if any([atom.element.symbol == 'H' for atom in aa_traj.top.atoms]):
         raise ValueError('All-atom topology file contains hydrogen atoms. Please remove them.')
 
