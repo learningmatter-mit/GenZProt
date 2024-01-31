@@ -472,13 +472,13 @@ def sample_ic(loader, device, model, atomic_nums, n_cgs, n_ensemble=10, info_dic
             recon_ics[ens].append(ic_recon.detach().cpu().numpy())
 
             ic_recon = ic_recon.reshape(-1, nres-2, 13, 3)
-            xyz_recon = ic_to_xyz(OG_CG_nxyz, ic_recon, info)
-            xyz_recon = xyz_recon.reshape(-1,3)
+            xyz_recon = ic_to_xyz(OG_CG_nxyz, ic_recon, info).reshape(-1,3)
 
             mask_xyz = batch['mask_xyz_list']
             xyz_recon[mask_xyz] *= 0
             recon_xyzs[ens].append(xyz_recon.detach().cpu().numpy())
 
+        # save the true xyzs, move to cpu
         xyz = batch['nxyz'][:, 1:]
         xyz[mask_xyz] *= 0
         true_xyzs.append(xyz.detach().cpu().numpy())
@@ -506,7 +506,6 @@ def sample_ic_backmap(loader, device, model, atomic_nums, n_cgs, n_ensemble=10, 
 
         nres = batch['num_CGs'][0]+2
         OG_CG_nxyz = batch['OG_CG_nxyz'].reshape(-1, nres, 4)
-        # OG_CG_nxyz = batch['OG_CG_nxyz'].reshape(-1, nres, 8)
         
 
         # compute cg prior 
@@ -517,10 +516,10 @@ def sample_ic_backmap(loader, device, model, atomic_nums, n_cgs, n_ensemble=10, 
             z = sample_normal(H_prior_mu, H_prior_sigma)
 
             ic_recon = model.decoder(cg_z, cg_xyz, CG_nbr_list, None, z, mask=None)   
-            ic_recon = ic_recon.reshape(-1, nres-2, 13, 3)
-            batch_size = ic_recon.shape[0]
 
+            ic_recon = ic_recon.reshape(-1, nres-2, 13, 3)
             xyz_recon = ic_to_xyz(OG_CG_nxyz, ic_recon, info).reshape(-1,3)
+
             mask_xyz = batch['mask_xyz_list']
             xyz_recon[mask_xyz] *= 0
             recon_xyzs[ens].append(xyz_recon.detach().cpu().numpy())
