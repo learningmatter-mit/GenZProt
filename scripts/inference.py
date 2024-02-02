@@ -126,7 +126,18 @@ def run_cv(params):
     info, n_cgs = traj_to_info(aa_traj)
     info_dict = {0: info}
 
-    cg_traj = md.load_pdb(params['ca_trace_path'])
+    if params["ca_trace_path"].split(".")[-1] == "pdb":
+        cg_traj = md.load_pdb(params['ca_trace_path'])
+    elif params["ca_trace_path"].split(".")[-1] == "xtc":
+        if not params['topology_path']:
+            raise ValueError("topology path is required for xtc files")
+        # select only the c-alpha atoms from the topology file, because we are loading a coarse-grained trajectory. 
+        cg_topology = aa_traj.atom_slice(aa_traj.top.select_atom_indices("alpha"))
+        cg_traj = md.load(params['ca_trace_path'], top=cg_topology) # need topology path 
+    else:
+        raise ValueError(f"test data file type not supported; you passed {params['ca_trace_path']}")
+
+    
 
     # create subdirectory 
     create_dir(working_dir)     
