@@ -14,7 +14,7 @@ from torch_scatter import scatter, scatter_mean, scatter_add
 from e3nn import o3
 from e3nn.nn import BatchNorm
 
-from conv import make_directed
+from GenZProt.conv import make_directed
 
 
 class TensorProductConvLayer(torch.nn.Module):

@@ -39,7 +39,7 @@ def annotate_job(task, job_name):
 
 def create_dir(name):
     if not os.path.isdir(name):
-        os.mkdir(name)   
+        os.makedirs(name)   
 
 def save_runtime(dtime, dir):
     hours = dtime//3600

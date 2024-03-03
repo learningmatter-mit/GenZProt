@@ -104,7 +104,7 @@ class CGDataset(TorchDataset):
         edge_list = []
         
         for nxyz in tqdm(self.props['nxyz'], desc='building aux edge list', file=sys.stdout):
-            edge_list.append(get_neighbor_list(nxyz[:, 1:4], device, auxcutoff, undirected).to("cpu"))
+            edge_list.append(get_neighbor_list(nxyz[:, 1:4], device, auxcutoff, undirected).to(device))
 
         self.props['bond_edge_list'] = edge_list
 
@@ -116,14 +116,14 @@ class CGDataset(TorchDataset):
 
         if not use_bond:
             for nxyz in tqdm(self.props['nxyz'], desc='building nbr list', file=sys.stdout):
-                nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, atom_cutoff, undirected).to("cpu"))
+                nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, atom_cutoff, undirected).to(device))
         else:
             nbr_list = self.props['bond_edge_list']
 
 
         if cg_cutoff is not None:    
             for nxyz in tqdm(self.props['CG_nxyz'], desc='building CG nbr list', file=sys.stdout):
-                cg_nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, cg_cutoff, undirected).to("cpu"))
+                cg_nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, cg_cutoff, undirected).to(device))
 
         elif cg_cutoff is None :
             for i, bond in enumerate( self.props['bond_edge_list'] ):
@@ -168,7 +168,7 @@ class CGDataset_inf(TorchDataset):
     def generate_aux_edges(self, auxcutoff, device='cpu', undirected=True):
         edge_list = []
         for nxyz in tqdm(self.props['CG_nxyz'], desc='building aux edge list', file=sys.stdout):
-            edge_list.append(get_neighbor_list(nxyz[:, 1:4], device, auxcutoff, undirected).to("cpu"))
+            edge_list.append(get_neighbor_list(nxyz[:, 1:4], device, auxcutoff, undirected).to(device))
 
         self.props['bond_edge_list'] = edge_list
 
@@ -176,7 +176,7 @@ class CGDataset_inf(TorchDataset):
 
         cg_nbr_list = []
         for nxyz in tqdm(self.props['CG_nxyz'], desc='building CG nbr list', file=sys.stdout):
-            cg_nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, cg_cutoff, undirected).to("cpu"))
+            cg_nbr_list.append(get_neighbor_list(nxyz[:, 1:4], device, cg_cutoff, undirected).to(device))
 
         self.props['CG_nbr_list'] = cg_nbr_list
 

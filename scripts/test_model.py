@@ -26,13 +26,14 @@ from torch.nn import Sequential
 from torch_scatter import scatter_mean
 from torch.utils.data import DataLoader
 
-sys.path.append("../GenZProt/")
-from data import CGDataset, CG_collate
-from cgvae import *
-from genzprot import *
-from e3nn_enc import e3nnEncoder, e3nnPrior
-from conv import * 
-from datasets import *
+
+
+from GenZProt.data import CGDataset, CG_collate
+from GenZProt.cgvae import *
+from GenZProt.genzprot import *
+from GenZProt.e3nn_enc import e3nnEncoder, e3nnPrior
+from GenZProt.conv import * 
+from GenZProt.datasets import *
 from utils import * 
 from utils_ic import *
 from sampling import sample_ic, sample_xyz
@@ -128,7 +129,16 @@ def run_cv(params):
     else:
         print("Sampling Task")
 
-    traj = md.load_pdb(params['test_data_path'])
+    if params["test_data_path"].split(".")[-1] == "pdb":
+        traj = md.load_pdb(params['test_data_path'])
+    elif params["test_data_path"].split(".")[-1] == "xtc":
+        if not params['topology_path']:
+            raise ValueError("topology path is required for xtc files")
+        topology = md.load_pdb(params['topology_path'])
+        topology = topology.atom_slice(topology.top.select_atom_indices("heavy"))
+        traj = md.load(params['test_data_path'], top=topology) # need topology path 
+    else:
+        raise ValueError(f"test data file type not supported; you passed {params['test_data_path']}")
     info, n_cg = traj_to_info(traj)
     n_cg_list, traj_list, info_dict = [n_cg], [traj], {0: info}
 
@@ -165,7 +175,7 @@ def run_cv(params):
 
         ndata = len(all_idx)-len(all_idx)%batch_size
         all_idx = all_idx[:ndata]
-        all_idx = all_idx[:100]
+        # all_idx = all_idx[:100] # this looks like it's limiting it to the first 100 frames. 
 
         n_cgs = n_cg_list[i]
         testset, mapping = build_split_dataset(traj[all_idx], params, mapping=None, prot_idx=i)
@@ -173,7 +183,7 @@ def run_cv(params):
 
     testset = torch.utils.data.ConcatDataset(testset_list)
     testloader = DataLoader(testset, batch_size=batch_size, collate_fn=CG_collate, shuffle=shuffle_flag, pin_memory=True)
-    
+
 
     # Z-matrix generation or xyz generation
     if dec_type == 'ic_dec': ic_flag = True
@@ -240,14 +250,23 @@ def run_cv(params):
                              
                        )
 
-
     # sample geometries 
     if ic_flag:
-        true_xyzs, recon_xyzs, recon_ics = sample_ic(testloader, device, model, atomic_nums, n_cgs, info_dict)
+        true_xyzs, recon_xyzs, recon_ics = sample_ic(loader=testloader, 
+                                                    device=device, 
+                                                    model=model, 
+                                                    atomic_nums=atomic_nums, 
+                                                    n_cgs=n_cgs, 
+                                                    info_dict=info_dict)
         with open(os.path.join(working_dir, f'sample_recon_ic.pkl'), 'wb') as filehandler:
             pickle.dump(recon_ics, filehandler)
     else:
-        true_xyzs, recon_xyzs = sample_xyz(testloader, device, model, atomic_nums, n_cgs, info_dict)
+        true_xyzs, recon_xyzs = sample_xyz(loader=testloader, 
+                                           device=device, 
+                                           model=model, 
+                                           atomic_nums=atomic_nums, 
+                                           n_cgs=n_cgs, 
+                                           info_dict=info_dict)
     
     with open(os.path.join(working_dir, f'sample_recon_xyz.pkl'), 'wb') as filehandler:
         pickle.dump(recon_xyzs, filehandler)
@@ -303,6 +322,7 @@ if __name__ == '__main__':
 
     # dataset
     parser.add_argument("-test_data_path", type=str, default=None)
+    parser.add_argument("-topology_path", type=str, default=None)
     parser.add_argument("-dataset", type=str, default='dipeptide')
     parser.add_argument("-cg_method", type=str, default='minimal')
 
@@ -380,5 +400,10 @@ if __name__ == '__main__':
     params['logdir'] += f'/test_'
     test_data = params['test_data_path'].split('/')[-1].split('.')[0]
     params['logdir'] += test_data
+    # determine type of file 
+    if params["logdir"].split("/")[-1] == ".pdb":
+        params['test_data_path_type'] == "pdb"
+    elif params["logdir"].split("/")[-1] == ".xtc":
+        params['test_data_path_type'] == "xtc"
 
     run_cv(params)

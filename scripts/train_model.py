@@ -13,13 +13,12 @@ from tqdm import tqdm
 import pandas as pd
 import statsmodels.api as sm
 
-sys.path.append("../GenZProt/")
-from data import CGDataset, CG_collate
-from cgvae import *
-from genzprot import *
-from e3nn_enc import e3nnEncoder, e3nnPrior
-from conv import * 
-from datasets import *
+from GenZProt.data import CGDataset, CG_collate
+from GenZProt.cgvae import *
+from GenZProt.genzprot import *
+from GenZProt.e3nn_enc import e3nnEncoder, e3nnPrior
+from GenZProt.conv import * 
+from GenZProt.datasets import *
 from utils import * 
 from utils_ic import *
 from sampling import * 
